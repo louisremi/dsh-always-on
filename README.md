@@ -1,4 +1,4 @@
-# dsh-download-files
+# @louisremi/dsh-download-files
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that replaces the **Show file location** buttons with **Download file** buttons.
 
@@ -7,7 +7,7 @@ When the Harness runs on a NAS, a server or in Docker, "show file location" has 
 ## Install
 
 ```sh
-dsh plugin --profile web add dsh-download-files
+dsh plugin --profile web add @louisremi/dsh-download-files
 ```
 
 Use the name of the profile your Harness runs with. The plugin loads live; restart the Harness only if the command says a restart is required.
@@ -33,7 +33,7 @@ The plugin adds an authenticated `GET /api/download.file` route to the Harness a
 ## Uninstall
 
 ```sh
-dsh plugin --profile web remove dsh-download-files
+dsh plugin --profile web remove @louisremi/dsh-download-files
 ```
 
 ## Releasing
@@ -43,7 +43,7 @@ Bump `version` in `package.json` (`npm version patch`), push, then publish a Git
 The maintainer then publishes the staged version with proof-of-presence:
 
 ```sh
-npm stage list dsh-download-files
+npm stage list @louisremi/dsh-download-files
 npm stage approve <stage-id>
 ```
 

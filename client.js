@@ -6,7 +6,7 @@
  * modifying it; disabling this plugin brings the stock buttons back.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-download-files',
+  id: '@louisremi/dsh-download-files',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
