@@ -1,15 +1,22 @@
 {
   "name": "dsh-download-files",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness plugin: replaces the \"Show file location\" buttons with \"Download file\" buttons, for Harnesses running on a remote host (NAS, Docker, server).",
-  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "download"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "download"
+  ],
   "license": "MIT",
   "author": "louisremi",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/louisremi/dsh-download-files.git"
   },
-  "bugs": { "url": "https://github.com/louisremi/dsh-download-files/issues" },
+  "bugs": {
+    "url": "https://github.com/louisremi/dsh-download-files/issues"
+  },
   "homepage": "https://github.com/louisremi/dsh-download-files#readme",
   "type": "module",
   "icon": "./icon.svg",
@@ -37,9 +44,13 @@
     "access": "public",
     "provenance": true
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
