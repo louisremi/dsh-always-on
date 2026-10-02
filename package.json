@@ -1,6 +1,6 @@
 {
   "name": "@louisremi/dsh-docker-adapter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DeepSeek Harness plugin: replaces the \"Show file location\" buttons with \"Download file\" buttons, for Harnesses running on a remote host (NAS, Docker, server).",
   "keywords": [
     "dsh",
