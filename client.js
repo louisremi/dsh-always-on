@@ -1,12 +1,12 @@
 /**
- * Client half of dsh-download-files. Registers "Download file" buttons in the
+ * Client half of dsh-docker-adapter. Registers "Download file" buttons in the
  * four slots where the stock open-in-app plugin renders "Show file location".
  * Slots keep one cell per `id` and the lowest `priority` wins, so registering
  * the stock id `open-in-app` at priority -1 shadows the stock control without
  * modifying it; disabling this plugin brings the stock buttons back.
  */
 window.__ModuleLoader__.load({
-  id: '@louisremi/dsh-download-files',
+  id: '@louisremi/dsh-docker-adapter',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
@@ -133,7 +133,7 @@ window.__ModuleLoader__.load({
         ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'download-files: dictionaries');
         ctx.effect(() => {
           const style = document.createElement('style');
-          style.dataset.plugin = 'dsh-download-files';
+          style.dataset.plugin = 'dsh-docker-adapter';
           style.textContent = CSS;
           document.head.appendChild(style);
           return () => { style.remove(); };

@@ -1,13 +1,13 @@
-# @louisremi/dsh-download-files
+# @louisremi/dsh-docker-adapter
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that replaces the **Show file location** buttons with **Download file** buttons.
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that adapts the web UI for running the Harness inside a Docker container.
 
-When the Harness runs on a NAS, a server or in Docker, "show file location" has no file manager to open on your machine. With this plugin the button downloads the file through your browser instead.
+When the Harness runs on a NAS, a server or in Docker, "show file location" has no file manager to open on your machine. This plugin replaces those buttons with **Download file** buttons that save the file through your browser instead.
 
 ## Install
 
 ```sh
-dsh plugin --profile web add @louisremi/dsh-download-files
+dsh plugin --profile web add @louisremi/dsh-docker-adapter
 ```
 
 Use the name of the profile your Harness runs with. The plugin loads live; restart the Harness only if the command says a restart is required.
@@ -33,7 +33,7 @@ The plugin adds an authenticated `GET /api/download.file` route to the Harness a
 ## Uninstall
 
 ```sh
-dsh plugin --profile web remove @louisremi/dsh-download-files
+dsh plugin --profile web remove @louisremi/dsh-docker-adapter
 ```
 
 ## Releasing
@@ -43,7 +43,7 @@ Bump `version` in `package.json` (`npm version patch`), push, then publish a Git
 The maintainer then publishes the staged version with proof-of-presence:
 
 ```sh
-npm stage list @louisremi/dsh-download-files
+npm stage list @louisremi/dsh-docker-adapter
 npm stage approve <stage-id>
 ```
 
