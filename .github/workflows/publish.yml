@@ -1,4 +1,4 @@
-name: Stage on npm
+name: Publish to npm
 
 on:
   release:
@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
+  id-token: write # npm trusted publishing (OIDC)
 
 jobs:
   publish:
@@ -28,6 +28,4 @@ jobs:
           fi
       - run: npm run check
       - run: npm test
-      - run: npm stage publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --provenance --access public
