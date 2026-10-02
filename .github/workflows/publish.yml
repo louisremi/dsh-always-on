@@ -1,4 +1,4 @@
-name: Publish to npm
+name: Stage on npm
 
 on:
   release:
@@ -28,6 +28,6 @@ jobs:
           fi
       - run: npm run check
       - run: npm test
-      - run: npm publish --provenance --access public
+      - run: npm stage publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

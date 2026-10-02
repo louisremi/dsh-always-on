@@ -38,7 +38,14 @@ dsh plugin --profile web remove dsh-download-files
 
 ## Releasing
 
-Bump `version` in `package.json` (`npm version patch`), push, then publish a GitHub Release whose tag matches (`gh release create vX.Y.Z --generate-notes`). A workflow publishes it to npm; it needs an `NPM_TOKEN` repository secret.
+Bump `version` in `package.json` (`npm version patch`), push, then publish a GitHub Release whose tag matches (`gh release create vX.Y.Z --generate-notes`). A workflow **stages** the package on npm (no 2FA needed in CI); it needs a stage-only `NPM_TOKEN` repository secret.
+
+The maintainer then publishes the staged version with proof-of-presence:
+
+```sh
+npm stage list dsh-download-files
+npm stage approve <stage-id>
+```
 
 ## License
 
