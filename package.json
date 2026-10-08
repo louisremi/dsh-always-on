@@ -57,7 +57,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-open-in-app",
         "@deepseek-ai/dsh-client-ui-deliverables",
-        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview"
+        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
       ]
     }
   }

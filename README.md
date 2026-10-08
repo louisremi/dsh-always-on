@@ -20,15 +20,17 @@ Nothing to configure. The download button (with a download icon) appears whereve
 - the toolbar of a file open in the sidebar preview
 - the empty state of a file the preview can't render
 
+The workspace folder's "Open in app" button (session header, and the sidebar Files tab) gets a **Show files** default that opens the sidebar file explorer. Editors the Harness can launch, such as Cursor, stay in its dropdown. Inside the Files tab itself, where "Show files" would do nothing, only the editor shortcut remains.
+
 ## How it works
 
-The plugin adds an authenticated `GET /api/download.file` route to the Harness and registers its buttons in the same UI slots as the stock ones, shadowing them. Downloads stream straight to disk by the browser, so large files are fine. Files are served under the same access rules as the Harness's own file preview.
+The plugin adds an authenticated `GET /api/download.file` route to the Harness and registers its buttons in the same UI slots as the stock ones, shadowing them. "Show files" calls the sidebar's public `openTab('files')`. Downloads stream straight to disk by the browser, so large files are fine. Files are served under the same access rules as the Harness's own file preview.
 
 ## Limitations
 
 - Single files only; folders are not downloadable.
-- The "Open in…" button for the workspace folder is not changed.
-- Tested with DSH `0.1.7-rc.2`. It depends on the stock `open-in-app` plugin's slot names.
+- Editors in the dropdown still launch on the Harness host, so they only work if that host has a display.
+- Tested with DSH `0.2.0-rc.2`. It depends on the stock `open-in-app` plugin's slot names.
 
 ## Uninstall
 
