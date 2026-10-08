@@ -6,7 +6,7 @@ export const CHUNK_BYTES = 1024 * 1024;
 
 const NUMERIC = /^\d+$/;
 
-function text(status, body, method) {
+export function text(status, body, method) {
   return new Response(method === 'HEAD' ? null : body, {
     status,
     headers: { 'cache-control': 'private, no-store' },
@@ -40,11 +40,14 @@ function remoteCode(error) {
     : undefined;
 }
 
-function failureStatus(error) {
+export function failureStatus(error) {
   const code = String(remoteCode(error) ?? '');
   if (code === 'session/not-found' || code === 'workspace-file/not-found'
     || code === 'SESSION_QUERY_SESSION_NOT_FOUND' || code === 'SESSION_QUERY_EVENT_NOT_FOUND'
     || code === 'FS_NOT_FOUND' || code === 'ENOENT' || code === 'ENOTDIR') return 404;
+  if (code === 'FS_STALE_VERSION' || code === 'FS_NOT_OBSERVED') return 409;
+  if (code === 'FS_TOO_LARGE' || code === 'workspace-file/too-large') return 413;
+  if (code === 'FS_NOT_TEXT') return 415;
   if (code === 'workspace-file/not-regular-file' || code === 'workspace-file/outside-workspace'
     || code === 'FS_NOT_REGULAR_FILE' || code === 'FS_PERMISSION_DENIED'
     || code === 'FS_SANDBOX_DENIED') return 403;
