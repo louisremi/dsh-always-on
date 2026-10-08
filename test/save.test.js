@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handleSave, registerSaveRoute, MAX_SAVE_BYTES } from '../save-route.js';
+import { handleSave, registerSaveRoute, MAX_SAVE_BYTES } from '../src/save-route.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-save-'));
 mkdirSync(join(dir, 'sub'));

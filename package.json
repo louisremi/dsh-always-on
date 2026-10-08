@@ -22,26 +22,22 @@
   },
   "homepage": "https://github.com/louisremi/dsh-docker-adapter#readme",
   "type": "module",
-  "icon": "./icon.svg",
+  "icon": "./src/assets/icon.svg",
   "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
+    ".": "./src/index.js",
+    "./client": "./src/client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
-    "index.js",
-    "download-route.js",
-    "save-route.js",
-    "client.js",
+    "src",
     "cordis.patch.yml",
     "locale",
-    "icon.svg",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check download-route.js && node --check save-route.js && node --check client.js",
+    "check": "node --check src/index.js && node --check src/download-route.js && node --check src/save-route.js && node --check src/client.js",
     "test": "node --test \"test/*.test.js\"",
     "test:e2e": "node e2e/browser.e2e.mjs"
   },

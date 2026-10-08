@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
 
     const EDITOR_ID = '@louisremi/dsh-docker-adapter/editor';
     const EDITOR_KIND = 'dlf-editor';
-    /** Largest file the editor opens; keep in step with MAX_SAVE_BYTES in save-route.js. */
+    /** Largest file the editor opens; keep in step with MAX_SAVE_BYTES in src/save-route.js. */
     const MAX_EDIT_BYTES = 1024 * 1024;
     const FRAME_LOAD_TIMEOUT_MS = 15000;
     const FRAME_REPLY_TIMEOUT_MS = 5000;

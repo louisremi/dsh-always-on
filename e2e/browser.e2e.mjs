@@ -1,7 +1,7 @@
 /**
  * Opt-in browser end-to-end suite: `npm run test:e2e`.
  *
- * Drives client.js and the real save route in headless Chromium against the
+ * Drives src/client.js and the real save route in headless Chromium against the
  * REAL Monaco build on jsDelivr (needs internet), including a CDN-blocked
  * run, edit conflicts and the iframe sandbox isolation. Not part of
  * `npm test` / CI because it needs a browser and network.
@@ -20,7 +20,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_CORE ?? 'playwright-core');
 const REACT_UMD = process.env.REACT_UMD ?? require.resolve('react/umd/react.development.js');
 const REACT_DOM_UMD = process.env.REACT_DOM_UMD ?? require.resolve('react-dom/umd/react-dom.development.js');
-const { handleSave } = await import('../save-route.js');
+const { handleSave } = await import('../src/save-route.js');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
 const versionOf = (p) => { const s = statSync(p, { bigint: true }); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}`; };
@@ -103,7 +103,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/react.js') return send(200, readFileSync(REACT_UMD), 'text/javascript');
   if (url.pathname === '/react-dom.js') return send(200, readFileSync(REACT_DOM_UMD), 'text/javascript');
   if (url.pathname === '/ft.js') return send(200, ftModule ?? '', 'text/javascript');
-  if (url.pathname === '/client.js') return send(200, readFileSync(new URL('../client.js', import.meta.url)), 'text/javascript');
+  if (url.pathname === '/client.js') return send(200, readFileSync(new URL('../src/client.js', import.meta.url)), 'text/javascript');
   if (url.pathname === '/fs/read') {
     const p = url.searchParams.get('path');
     try { const b = readFileSync(p); return send(200, JSON.stringify({ b64: b.toString('base64'), version: versionOf(p) }), 'application/json'); }

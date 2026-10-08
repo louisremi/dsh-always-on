@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handleDownload, contentDisposition, registerDownloadRoute, CHUNK_BYTES } from '../download-route.js';
+import { handleDownload, contentDisposition, registerDownloadRoute, CHUNK_BYTES } from '../src/download-route.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-'));
 const big = join(dir, 'big file é.bin');
