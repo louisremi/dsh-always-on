@@ -66,6 +66,7 @@ window.__ModuleLoader__.load({
       'editor.saveError': 'Could not save the file.',
       'editor.denied': 'Saving is not permitted in this session\'s sandbox mode.',
       'editor.gone': 'The file no longer exists.',
+      'editor.noRoute': 'Saving is unavailable: the Harness has no save route (restart the Harness to load the updated plugin).',
       'editor.retry': 'Try again',
     };
     const zh = {
@@ -90,6 +91,7 @@ window.__ModuleLoader__.load({
       'editor.saveError': '无法保存文件。',
       'editor.denied': '当前会话的沙箱模式不允许保存。',
       'editor.gone': '文件已不存在。',
+      'editor.noRoute': '无法保存：Harness 没有保存接口（请重启 Harness 以加载更新后的插件）。',
       'editor.retry': '重试',
     };
 
@@ -681,9 +683,14 @@ window.__ModuleLoader__.load({
             editor.current.focus();
             return;
           }
+          // Only our route answers with JSON { error }; a 404 without it comes from
+          // the server's router (route not registered), not from a missing file.
+          const answered = (response.headers.get('content-type') ?? '').includes('application/json');
           if (response.status === 409) setSave({ state: 'conflict' });
           else if (response.status === 403) setSave({ state: 'error', key: 'editor.denied' });
-          else if (response.status === 404) setSave({ state: 'error', key: 'editor.gone' });
+          else if (response.status === 404 || response.status === 405) {
+            setSave({ state: 'error', key: answered && response.status === 404 ? 'editor.gone' : 'editor.noRoute' });
+          }
           else if (response.status === 413) setSave({ state: 'error', key: 'editor.tooLarge' });
           else setSave({ state: 'error', key: 'editor.saveError' });
         } catch {

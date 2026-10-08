@@ -275,6 +275,29 @@ await check('sandbox isolation: CDN code in the frame cannot reach the page, its
   assert.equal(probe.otherFetch, 'blocked');
 });
 
+await check('save 404 from a missing ROUTE is reported as such, not as "file no longer exists"', async (page) => {
+  const f = join(dir, 'noroute.txt'); writeFileSync(f, 'a');
+  await page.route('**/api/save.file', (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'not found' }));
+  await open(page, f);
+  const frame = await monacoFrame(page);
+  await frame.click('.monaco-editor .view-lines');
+  await page.keyboard.type('x');
+  await page.keyboard.press('Control+s');
+  await page.waitForFunction(() => /editor\.noRoute/.test(document.querySelector('.dlf-ed-status')?.textContent ?? ''), null, { timeout: 8000 });
+  assert.equal(readFileSync(f, 'utf8'), 'a');
+});
+
+await check('save 404 from our handler (file really gone) still says the file no longer exists', async (page) => {
+  const f = join(dir, 'vanish.txt'); writeFileSync(f, 'a');
+  await open(page, f);
+  const frame = await monacoFrame(page);
+  (await import('node:fs')).unlinkSync(f);
+  await frame.click('.monaco-editor .view-lines');
+  await page.keyboard.type('x');
+  await page.keyboard.press('Control+s');
+  await page.waitForFunction(() => /editor\.gone/.test(document.querySelector('.dlf-ed-status')?.textContent ?? ''), null, { timeout: 8000 });
+});
+
 await browser.close();
 server.close();
 for (const r of results) console.log(r[0], '-', r[1], r[2] ? `\n     ${r[2]}` : '', r[3]?.length ? `\n     console: ${r[3].join(' | ')}` : '');
