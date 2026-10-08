@@ -1,8 +1,13 @@
 /**
- * Client half of dsh-docker-adapter. Registers "Download file" buttons in the
- * four slots where the stock open-in-app plugin renders "Show file location",
- * and replaces the stock directory "Open in app" control (Files / Cursor) with
- * "Show files", which switches to the sidebar file explorer.
+ * Client half of dsh-docker-adapter, for a Harness running on a remote host
+ * (NAS, Docker, server) where native "open in app" actions cannot work.
+ *
+ *  - "Download file" replaces the stock "Show file location" buttons.
+ *  - "Show files" replaces the stock directory "Open in app" control and
+ *    switches to the sidebar file explorer.
+ *  - "Edit" opens a file in a sidebar editor tab (Monaco, loaded from a CDN
+ *    inside a sandboxed iframe; plain textarea when the CDN is unreachable).
+ *
  * Slots keep one cell per `id` and the lowest `priority` wins, so registering
  * the stock id `open-in-app` at priority -1 shadows the stock control without
  * modifying it; disabling this plugin brings the stock buttons back.
@@ -15,34 +20,77 @@ window.__ModuleLoader__.load({
 
     const NS = 'download-files';
     const ROUTE = 'api/download.file';
+    const SAVE_ROUTE = 'api/save.file';
     const STOCK_ID = 'open-in-app';
     const ERROR_MS = 4000;
-    const APPS_ROUTE = 'open-in-app/apps';
-    const OPEN_ROUTE = 'open-in-app/open';
-    const FILE_MANAGERS = new Set(['filemanager', 'finder', 'explorer']);
-    const APP_NAMES = {
-      cursor: 'Cursor', vscode: 'VS Code', vscodeinsiders: 'VS Code Insiders',
-      windsurf: 'Windsurf', zed: 'Zed', sublimetext: 'Sublime Text',
-    };
-    const ICON_ROUTE = 'open-in-app/icon';
+
+    const EDITOR_ID = '@louisremi/dsh-docker-adapter/editor';
+    const EDITOR_KIND = 'dlf-editor';
+    /** Largest file the editor opens; keep in step with MAX_SAVE_BYTES in save-route.js. */
+    const MAX_EDIT_BYTES = 1024 * 1024;
+    const FRAME_LOAD_TIMEOUT_MS = 15000;
+    const FRAME_REPLY_TIMEOUT_MS = 5000;
+
+    /**
+     * Monaco is loaded from this pinned jsDelivr build. 0.52.x is the last
+     * line with the classic AMD layout this loader code targets; the loader
+     * itself is integrity-checked (SRI). Bump both together.
+     */
+    const MONACO_VERSION = '0.52.2';
+    const MONACO_ORIGIN = 'https://cdn.jsdelivr.net';
+    const MONACO_BASE = `${MONACO_ORIGIN}/npm/monaco-editor@${MONACO_VERSION}/min/vs`;
+    const MONACO_LOADER_SRI = 'sha384-pHG02SG8pId94Np3AbPmBEJ1yPqaH0IkJGLSNGXYmuGhkazT8Lr/57WYpbkGjJtu';
+
+    /** Extensions the editor never offers (the editor also refuses binary content itself). */
+    const BINARY_EXTENSIONS = /\.(png|jpe?g|gif|webp|avif|bmp|ico|tiff?|heic|pdf|docx?|xlsx?|pptx?|odt|ods|odp|zip|gz|tgz|bz2|xz|7z|rar|tar|jar|war|exe|dll|so|dylib|bin|class|o|a|wasm|mp3|mp4|m4a|mov|avi|mkv|webm|wav|flac|ogg|woff2?|ttf|otf|eot|sqlite3?|db|pyc|iso|dmg)$/i;
 
     const en = {
       'download.title': 'Download file',
       'download.error': 'Could not download the file. Try again.',
       'files.show': 'Show files',
-      'files.more': 'More ways to open',
-      'files.default': '{app} (default)',
-      'files.openError': 'Could not open. Try again.',
-      'app.cursor': 'Cursor',
+      'edit.title': 'Edit file',
+      'editor.save': 'Save',
+      'editor.saving': 'Saving…',
+      'editor.saved': 'Saved',
+      'editor.unsaved': 'Unsaved changes',
+      'editor.loading': 'Opening…',
+      'editor.plain': 'Plain-text mode (code editor unavailable)',
+      'editor.discard': 'Discard unsaved changes to {name}?',
+      'editor.conflict': 'This file changed on disk after you opened it.',
+      'editor.reload': 'Reload from disk',
+      'editor.overwrite': 'Overwrite',
+      'editor.keep': 'Keep editing',
+      'editor.tooLarge': 'Too large to edit here (limit {limit}).',
+      'editor.notText': 'This file is not editable text.',
+      'editor.loadError': 'Could not open the file.',
+      'editor.saveError': 'Could not save the file.',
+      'editor.denied': 'Saving is not permitted in this session\'s sandbox mode.',
+      'editor.gone': 'The file no longer exists.',
+      'editor.retry': 'Try again',
     };
     const zh = {
       'download.title': '下载文件',
       'download.error': '无法下载文件，请重试',
       'files.show': '显示文件',
-      'files.more': '更多打开方式',
-      'files.default': '{app}（默认）',
-      'files.openError': '打开失败，请重试',
-      'app.cursor': 'Cursor',
+      'edit.title': '编辑文件',
+      'editor.save': '保存',
+      'editor.saving': '正在保存…',
+      'editor.saved': '已保存',
+      'editor.unsaved': '有未保存的更改',
+      'editor.loading': '正在打开…',
+      'editor.plain': '纯文本模式（代码编辑器不可用）',
+      'editor.discard': '放弃对 {name} 的未保存更改？',
+      'editor.conflict': '此文件在你打开后已在磁盘上被修改。',
+      'editor.reload': '从磁盘重新加载',
+      'editor.overwrite': '覆盖',
+      'editor.keep': '继续编辑',
+      'editor.tooLarge': '文件过大，无法在此编辑（上限 {limit}）。',
+      'editor.notText': '此文件不是可编辑的文本。',
+      'editor.loadError': '无法打开文件。',
+      'editor.saveError': '无法保存文件。',
+      'editor.denied': '当前会话的沙箱模式不允许保存。',
+      'editor.gone': '文件已不存在。',
+      'editor.retry': '重试',
     };
 
     const CSS = `
@@ -53,18 +101,36 @@ window.__ModuleLoader__.load({
 .dlf-split[data-error] .dlf-main{color:var(--dsw-alias-state-error-primary)}
 .dlf-split[data-size=large]{height:36px;border-color:var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md)}
 .dlf-split[data-size=large] .dlf-main{gap:6px;padding:6px 14px;font-size:14px}
-.dlf-menuAnchor{flex:none;align-self:center;display:inline-flex}
-.dlf-chevron{display:inline-flex;align-items:center;justify-content:center;padding:3px 4px 3px 3px;border:0;border-left:.5px solid var(--dsw-alias-border-l4);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
-.dlf-chevron:hover:not(:disabled),.dlf-chevron:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
-.dlf-chevron:disabled{cursor:default}
-.dlf-appIcon{object-fit:contain}
+.dlf-ed{box-sizing:border-box;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:12px}
+.dlf-ed-bar{display:flex;align-items:center;gap:8px;flex:none;padding:6px 10px;border-bottom:.5px solid var(--dsw-alias-border-l2)}
+.dlf-ed-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.dlf-ed-dot{color:var(--dsw-alias-state-warn-primary)}
+.dlf-ed-spacer{flex:1}
+.dlf-ed-status{color:var(--dsw-alias-label-secondary);white-space:nowrap}
+.dlf-ed-status[data-tone=error]{color:var(--dsw-alias-state-error-primary)}
+.dlf-ed-status[data-tone=ok]{color:var(--dsw-alias-state-success-primary)}
+.dlf-ed-btn{padding:3px 10px;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer}
+.dlf-ed-btn:hover:not(:disabled),.dlf-ed-btn:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
+.dlf-ed-btn:disabled{opacity:.5;cursor:default}
+.dlf-ed-banner{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex:none;padding:6px 10px;border-bottom:.5px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-state-warn-primary)}
+.dlf-ed-note{flex:none;padding:4px 10px;color:var(--dsw-alias-label-secondary);border-bottom:.5px solid var(--dsw-alias-border-l1)}
+.dlf-ed-body{position:relative;flex:1;min-height:0}
+.dlf-ed-frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent}
+.dlf-ed-text{position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;margin:0;padding:8px 10px;resize:none;border:0;outline:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;tab-size:4;white-space:pre}
+.dlf-ed-msg{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px 12px;color:var(--dsw-alias-label-secondary)}
 `;
 
-    function DownloadIcon({ size }) {
+    // ───────────────────────────── icons ─────────────────────────────
+
+    function Svg({ size, children }) {
       return h('svg', {
         width: size, height: size, viewBox: '0 0 16 16', fill: 'none',
         'aria-hidden': 'true', strokeWidth: 1,
-      },
+      }, children);
+    }
+
+    function DownloadIcon({ size }) {
+      return h(Svg, { size },
         h('path', { d: 'M8 1.95317V10.0469', stroke: 'currentColor' }),
         h('path', { d: 'M4.25 6.29688L8 10.0469L11.75 6.29688', stroke: 'currentColor' }),
         h('path', {
@@ -72,6 +138,48 @@ window.__ModuleLoader__.load({
           stroke: 'currentColor',
         }));
     }
+
+    function FilesIcon({ size }) {
+      return h(Svg, { size },
+        h('path', {
+          d: 'M1.5 3.5C1.5 2.948 1.948 2.5 2.5 2.5H6L7.5 4.25H13.5C14.052 4.25 14.5 4.698 14.5 5.25V12.5C14.5 13.052 14.052 13.5 13.5 13.5H2.5C1.948 13.5 1.5 13.052 1.5 12.5V3.5Z',
+          stroke: 'currentColor',
+        }));
+    }
+
+    function EditIcon({ size }) {
+      return h(Svg, { size },
+        h('path', { d: 'M10.5 2.5L13.5 5.5L5.5 13.5H2.5V10.5L10.5 2.5Z', stroke: 'currentColor' }),
+        h('path', { d: 'M9 4L12 7', stroke: 'currentColor' }));
+    }
+
+    // ─────────────────────────── file addresses ───────────────────────────
+
+    // Same grammar as the stock `dsh-resource://file/session/<id>/<path>` address.
+    const FILE_ADDRESS_PREFIX = 'dsh-resource://file/';
+    const encodeSegment = (segment) => encodeURIComponent(segment).replace(/%3A/gi, ':');
+
+    function sessionFileAddress(sessionId, path) {
+      const normalized = path.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+      return `${FILE_ADDRESS_PREFIX}session/${encodeSegment(sessionId)}/${normalized.split('/').map(encodeSegment).join('/')}`;
+    }
+
+    /** { sessionId, path } of a session file address, or undefined. */
+    function parseFileAddress(address) {
+      try {
+        if (typeof address !== 'string' || !address.startsWith(FILE_ADDRESS_PREFIX)) return undefined;
+        const end = address.search(/[?#]/);
+        const [scope, id, ...segments] = address.slice(FILE_ADDRESS_PREFIX.length, end === -1 ? undefined : end).split('/');
+        if (scope !== 'session' || !id || segments.length === 0) return undefined;
+        return { sessionId: decodeURIComponent(id), path: segments.map(decodeURIComponent).join('/') };
+      } catch {
+        return undefined;
+      }
+    }
+
+    const baseName = (path) => path.split('/').filter(Boolean).pop() ?? path;
+
+    // ───────────────────────── download buttons ─────────────────────────
 
     /** Trigger a browser download of `url` without buffering it in JS memory. */
     function startDownload(url) {
@@ -131,151 +239,46 @@ window.__ModuleLoader__.load({
       }, h(DownloadIcon, { size }), large && h('span', null, label)));
     }
 
-    function FilesIcon({ size }) {
-      return h('svg', {
-        width: size, height: size, viewBox: '0 0 16 16', fill: 'none',
-        'aria-hidden': 'true', strokeWidth: 1,
-      },
-        h('path', {
-          d: 'M1.5 3.5C1.5 2.948 1.948 2.5 2.5 2.5H6L7.5 4.25H13.5C14.052 4.25 14.5 4.698 14.5 5.25V12.5C14.5 13.052 14.052 13.5 13.5 13.5H2.5C1.948 13.5 1.5 13.052 1.5 12.5V3.5Z',
-          stroke: 'currentColor',
-        }));
-    }
-
-    function ChevronIcon({ size }) {
-      return h('svg', {
-        width: size, height: size, viewBox: '0 0 16 16', fill: 'none',
-        'aria-hidden': 'true', strokeWidth: 1,
-      }, h('path', { d: 'M4 6L8 10L12 6', stroke: 'currentColor' }));
-    }
-
-    /** App icon from the stock open-in-app route, with a generic fallback glyph. */
-    function AppIcon({ id, size }) {
-      const [failed, setFailed] = React.useState(false);
-      if (failed) return h(FilesIcon, { size });
-      return h('img', {
-        src: new URL(`${ICON_ROUTE}/${id}`, document.baseURI).href,
-        width: size, height: size, className: 'dlf-appIcon', alt: '', draggable: false,
-        onError: () => { setFailed(true); },
-      });
-    }
-
-    /** Page-lifetime read of the editors the Host can launch (file managers excluded). */
-    let appsRead;
-    function readApps() {
-      appsRead ??= (async () => {
-        try {
-          const response = await fetch(new URL(APPS_ROUTE, document.baseURI).href, {
-            headers: { accept: 'application/json' },
-          });
-          if (!response.ok) return [];
-          const payload = await response.json();
-          return Array.isArray(payload.apps)
-            ? payload.apps.filter((id) => typeof id === 'string' && !FILE_MANAGERS.has(id)) : [];
-        } catch {
-          return [];
-        }
-      })();
-      return appsRead;
-    }
-
-    function useApps() {
-      const [apps, setApps] = React.useState([]);
-      React.useEffect(() => {
-        let alive = true;
-        readApps().then((ids) => { if (alive) setApps(ids); });
-        return () => { alive = false; };
-      }, []);
-      return apps;
-    }
-
     /**
-     * Directory-level replacement for the stock "Open in app" control. The
-     * default action reveals the sidebar file explorer; remaining launchable
-     * editors (e.g. Cursor) stay in the menu. `appsOnly` (inside the Files tab,
-     * where "Show files" would be a no-op) renders just the first editor.
+     * Directory-level replacement for the stock "Open in app" control: one
+     * button that opens the sidebar file explorer through the sidebar's public
+     * `openTab('files')`, which works without a desktop on the Harness host.
      */
-    function DirectoryOpen({ cwd, appsOnly, sidebarRight, Menu, t }) {
-      const apps = useApps();
-      const [menuOpen, setMenuOpen] = React.useState(false);
-      const [state, setState] = React.useState('idle');
-      const timer = React.useRef(undefined);
-      React.useEffect(() => () => { clearTimeout(timer.current); }, []);
+    function ShowFiles({ sidebarRight, t }) {
+      const label = t('files.show');
+      return h('div', { className: 'dlf-split', 'data-size': 'compact', 'data-show-files': '' },
+        h('button', {
+          type: 'button',
+          className: 'dlf-main',
+          title: label,
+          'aria-label': label,
+          onClick: () => {
+            try { sidebarRight.openTab('files'); } catch (error) {
+              console.warn('show files rejected:', error);
+            }
+          },
+        }, h(FilesIcon, { size: 13 })));
+    }
 
-      const launch = async (app) => {
-        setMenuOpen(false);
-        if (state === 'busy' || !cwd) return;
-        clearTimeout(timer.current);
-        setState('busy');
-        let ok = false;
-        try {
-          ok = (await fetch(new URL(OPEN_ROUTE, document.baseURI).href, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ app, path: cwd }),
-          })).ok;
-        } catch { /* reported below */ }
-        if (ok) { setState('idle'); return; }
-        setState('error');
-        timer.current = setTimeout(() => { setState('idle'); }, ERROR_MS);
-      };
-      const showFiles = () => {
-        setMenuOpen(false);
-        try { sidebarRight.openTab('files'); } catch (error) {
-          console.warn('show files rejected:', error);
-        }
-      };
-
-      const first = apps[0];
-      if (appsOnly && first === undefined) return null;
-      const error = state === 'error';
-      const label = error ? t('files.openError')
-        : appsOnly ? `${APP_NAMES[first] ?? first}` : t('files.show');
-      const hasMenu = !appsOnly && apps.length > 0 && Menu !== undefined;
-      const body = h('div', {
-        className: 'dlf-split',
-        'data-size': 'compact',
-        'data-error': error ? '' : undefined,
-        'data-state': state === 'busy' ? 'busy' : 'idle',
-      },
-      h('button', {
-        type: 'button',
-        className: 'dlf-main',
-        disabled: state === 'busy',
-        title: label,
-        'aria-label': label,
-        role: error ? 'alert' : undefined,
-        onClick: appsOnly ? () => { launch(first); } : showFiles,
-      }, appsOnly ? h(AppIcon, { id: first, size: 13 }) : h(FilesIcon, { size: 13 })),
-      hasMenu && h('button', {
-        type: 'button',
-        className: 'dlf-chevron',
-        disabled: state === 'busy',
-        'aria-haspopup': 'menu',
-        'aria-expanded': menuOpen,
-        'aria-label': t('files.more'),
-        onClick: () => { setMenuOpen((value) => !value); },
-      }, h(ChevronIcon, { size: 10 })));
-      if (!hasMenu) return body;
-      return h(Menu, {
-        className: 'dlf-menuAnchor',
-        open: menuOpen && state !== 'busy',
-        autoFocus: true,
-        portal: true,
-        dense: true,
-        align: 'end',
-        onClose: () => { setMenuOpen(false); },
-        items: [
-          { id: 'files', icon: h(FilesIcon, { size: 14 }), label: t('files.default', { app: t('files.show') }) },
-          ...apps.map((id) => ({
-            id: `app:${id}`, icon: h(AppIcon, { id, size: 14 }), label: APP_NAMES[id] ?? id,
-          })),
-        ],
-        onSelect: (id) => {
-          if (id === 'files') showFiles(); else launch(id.slice(4));
-        },
-        anchor: body,
-      });
+    /** Opens a previewed file in the sidebar editor tab. */
+    function EditButton({ sessionId, absolutePath, sidebarRight, t }) {
+      if (typeof sessionId !== 'string' || typeof absolutePath !== 'string'
+        || BINARY_EXTENSIONS.test(absolutePath)) return null;
+      const label = t('edit.title');
+      return h('div', { className: 'dlf-split', 'data-size': 'compact', 'data-edit-file': '' },
+        h('button', {
+          type: 'button',
+          className: 'dlf-main',
+          title: label,
+          'aria-label': label,
+          onClick: () => {
+            try {
+              sidebarRight.openResource(sessionFileAddress(sessionId, absolutePath), { kind: EDITOR_KIND });
+            } catch (error) {
+              console.warn('edit file rejected:', error);
+            }
+          },
+        }, h(EditIcon, { size: 13 })));
     }
 
     /** Download URL for a stock `api/present.open|changes.open?…` action URL. */
@@ -299,8 +302,447 @@ window.__ModuleLoader__.load({
       return to.href;
     }
 
+    // ─────────────────────── text helpers (pure) ───────────────────────
+
+    /** Dominant line ending of `text`. */
+    function dominantEol(text) {
+      const crlf = (text.match(/\r\n/g) ?? []).length;
+      const lf = (text.match(/\n/g) ?? []).length - crlf;
+      return crlf > lf ? '\r\n' : '\n';
+    }
+
+    const toLf = (text) => text.replace(/\r\n/g, '\n');
+    const withEol = (text, eol) => (eol === '\r\n' ? text.replace(/\r?\n/g, '\r\n') : text);
+
+    /**
+     * Decode a file's bytes as strict UTF-8, keeping a leading BOM so a save
+     * writes it back. Returns { text } or { reason: 'notText' }.
+     */
+    function decodeText(bytes) {
+      if (bytes.subarray(0, 8192).includes(0)) return { reason: 'notText' };
+      try {
+        return { text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes) };
+      } catch {
+        return { reason: 'notText' };
+      }
+    }
+
+    const formatBytes = (n) => (n >= 1024 * 1024 ? `${n / 1024 / 1024} MiB` : `${Math.round(n / 1024)} KiB`);
+
+    // ─────────────────── Monaco in a sandboxed iframe ───────────────────
+
+    /**
+     * Runs INSIDE the sandboxed iframe (it is stringified into the frame
+     * document, so it must not reference anything from this closure).
+     * Protocol, frame → parent: loaded, ready, dirty, save, content, error.
+     * Parent → frame: init, getContent, setContent, markSaved, theme, focus.
+     */
+    function frameMain(config) {
+      const send = (message) => { parent.postMessage(message, '*'); };
+      const fail = (message) => { send({ type: 'error', message: String(message) }); };
+      window.addEventListener('error', (event) => { fail(event.message); });
+      if (typeof require === 'undefined' || typeof require.config !== 'function') {
+        fail('loader unavailable');
+        return;
+      }
+      const workerSource = `self.MonacoEnvironment={baseUrl:${JSON.stringify(config.base.replace(/vs$/, ''))}};importScripts(${JSON.stringify(`${config.base}/base/worker/workerMain.js`)});`;
+      const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
+      self.MonacoEnvironment = { getWorkerUrl: () => workerUrl };
+      require.config({ paths: { vs: config.base } });
+
+      let monaco;
+      let editor;
+      let model;
+      let savedId = 0;
+      let lastDirty = false;
+      const report = () => {
+        const dirty = model.getAlternativeVersionId() !== savedId;
+        if (dirty !== lastDirty) { lastDirty = dirty; send({ type: 'dirty', dirty }); }
+      };
+
+      const handlers = {
+        init(message) {
+          model = monaco.editor.createModel(message.content, undefined, monaco.Uri.file(message.fileName));
+          editor = monaco.editor.create(document.getElementById('c'), {
+            model,
+            theme: message.dark ? 'vs-dark' : 'vs',
+            automaticLayout: true,
+            minimap: { enabled: false },
+            fontSize: 13,
+            scrollBeyondLastLine: false,
+            renderWhitespace: 'selection',
+          });
+          savedId = model.getAlternativeVersionId();
+          model.onDidChangeContent(report);
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { send({ type: 'save' }); });
+          send({ type: 'ready' });
+        },
+        getContent(message) {
+          send({ type: 'content', id: message.id, content: model.getValue(), token: model.getAlternativeVersionId() });
+        },
+        setContent(message) {
+          model.setValue(message.content);
+          savedId = model.getAlternativeVersionId();
+          report();
+        },
+        markSaved(message) {
+          savedId = message.token;
+          report();
+        },
+        theme(message) { monaco.editor.setTheme(message.dark ? 'vs-dark' : 'vs'); },
+        focus() { editor.focus(); },
+      };
+
+      window.addEventListener('message', (event) => {
+        if (event.source !== parent) return;
+        const message = event.data;
+        const handler = message !== null && typeof message === 'object' ? handlers[message.type] : undefined;
+        if (handler === undefined || (message.type !== 'init' && editor === undefined)) return;
+        try { handler(message); } catch (error) { fail(error); }
+      });
+
+      require(['vs/editor/editor.main'], () => {
+        monaco = window.monaco;
+        send({ type: 'loaded' });
+      }, (error) => { fail(error); });
+    }
+
+    /** The iframe document: pinned loader with SRI, a CSP limiting everything to the CDN. */
+    function frameDocument() {
+      const csp = [
+        'default-src \'none\'',
+        `script-src 'unsafe-inline' ${MONACO_ORIGIN} blob:`,
+        `style-src 'unsafe-inline' ${MONACO_ORIGIN}`,
+        `font-src ${MONACO_ORIGIN} data:`,
+        `img-src data: blob: ${MONACO_ORIGIN}`,
+        'worker-src blob:',
+        `connect-src ${MONACO_ORIGIN}`,
+      ].join('; ');
+      const main = `(${frameMain.toString()})(${JSON.stringify({ base: MONACO_BASE }).replace(/</g, '\\u003c')});`;
+      return '<!doctype html><html><head><meta charset="utf-8">'
+        + `<meta http-equiv="Content-Security-Policy" content="${csp}">`
+        + '<style>html,body,#c{margin:0;width:100%;height:100%;overflow:hidden}</style></head>'
+        + '<body><div id="c"></div>'
+        + `<script src="${MONACO_BASE}/loader.js" integrity="${MONACO_LOADER_SRI}" crossorigin="anonymous"></script>`
+        + `<script>${main}</script></body></html>`;
+    }
+
+    let cachedFrameDocument;
+    const frameHtml = () => (cachedFrameDocument ??= frameDocument());
+
+    // ───────────────────────────── editors ─────────────────────────────
+    // Both implement: getContent() → { content, token }, setContent(text),
+    // markSaved(token), focus().
+
+    const MonacoFrame = React.forwardRef(function MonacoFrame(
+      { fileName, initial, dark, onDirty, onSave, onFail }, ref) {
+      const frame = React.useRef(null);
+      const replies = React.useRef(new Map());
+      const sequence = React.useRef(0);
+      const first = React.useRef({ fileName, content: initial, dark });
+      const callbacks = React.useRef({ onDirty, onSave, onFail });
+      callbacks.current = { onDirty, onSave, onFail };
+
+      const post = React.useCallback((message) => {
+        frame.current?.contentWindow?.postMessage(message, '*');
+      }, []);
+
+      React.useEffect(() => {
+        // Once the editor is up, its text may be unsaved: a late error is only
+        // logged, never a reason to swap the editor out from under the user.
+        let ready = false;
+        const failed = (reason) => {
+          if (ready) console.warn('monaco frame error after ready:', reason);
+          else callbacks.current.onFail(reason);
+        };
+        const timer = setTimeout(() => { failed('timeout'); }, FRAME_LOAD_TIMEOUT_MS);
+        const onMessage = (event) => {
+          if (event.source !== frame.current?.contentWindow) return;
+          const message = event.data;
+          if (message === null || typeof message !== 'object') return;
+          switch (message.type) {
+            case 'loaded': post({ type: 'init', ...first.current }); break;
+            case 'ready': ready = true; clearTimeout(timer); break;
+            case 'dirty': callbacks.current.onDirty(message.dirty === true); break;
+            case 'save': callbacks.current.onSave(); break;
+            case 'content': {
+              const pending = replies.current.get(message.id);
+              replies.current.delete(message.id);
+              pending?.resolve({ content: message.content, token: message.token });
+              break;
+            }
+            case 'error': clearTimeout(timer); failed(message.message); break;
+            default: break;
+          }
+        };
+        window.addEventListener('message', onMessage);
+        return () => {
+          clearTimeout(timer);
+          window.removeEventListener('message', onMessage);
+          for (const pending of replies.current.values()) pending.reject(new Error('editor closed'));
+          replies.current.clear();
+        };
+      }, [post]);
+
+      React.useEffect(() => { post({ type: 'theme', dark }); }, [dark, post]);
+
+      React.useImperativeHandle(ref, () => ({
+        getContent: () => new Promise((resolve, reject) => {
+          sequence.current += 1;
+          const id = sequence.current;
+          const timer = setTimeout(() => {
+            replies.current.delete(id);
+            reject(new Error('editor did not answer'));
+          }, FRAME_REPLY_TIMEOUT_MS);
+          replies.current.set(id, {
+            resolve: (value) => { clearTimeout(timer); resolve(value); },
+            reject: (error) => { clearTimeout(timer); reject(error); },
+          });
+          post({ type: 'getContent', id });
+        }),
+        setContent: (content) => { post({ type: 'setContent', content }); },
+        markSaved: (token) => { post({ type: 'markSaved', token }); },
+        focus: () => { post({ type: 'focus' }); },
+      }), [post]);
+
+      return h('iframe', {
+        ref: frame,
+        className: 'dlf-ed-frame',
+        title: fileName,
+        // Opaque origin: the CDN code cannot reach the Harness page, its cookies or its API.
+        sandbox: 'allow-scripts',
+        srcDoc: frameHtml(),
+      });
+    });
+
+    const TextEditor = React.forwardRef(function TextEditor({ initial, eol, onDirty, onSave }, ref) {
+      const area = React.useRef(null);
+      const saved = React.useRef(toLf(initial));
+      React.useImperativeHandle(ref, () => ({
+        getContent: async () => {
+          const value = area.current.value;
+          return { content: withEol(value, eol), token: value };
+        },
+        setContent: (content) => {
+          const value = toLf(content);
+          area.current.value = value;
+          saved.current = value;
+          onDirty(false);
+        },
+        markSaved: (token) => {
+          saved.current = token;
+          onDirty(area.current.value !== saved.current);
+        },
+        focus: () => { area.current?.focus(); },
+      }), [eol, onDirty]);
+      return h('textarea', {
+        ref: area,
+        className: 'dlf-ed-text',
+        defaultValue: toLf(initial),
+        spellCheck: false,
+        'aria-label': 'editor',
+        onChange: () => { onDirty(area.current.value !== saved.current); },
+        onKeyDown: (event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+            event.preventDefault();
+            onSave();
+          }
+        },
+      });
+    });
+
+    // ──────────────────────── dirty tracking store ────────────────────────
+
+    /** Tab ids are only unique within a session's layout. */
+    const dirtyKey = (sessionId, tabId) => `${sessionId}\u0000${tabId}`;
+
+    const dirtyTabs = {
+      ids: new Set(),
+      listeners: new Set(),
+      revision: 0,
+      set(id, dirty) {
+        if (this.ids.has(id) === dirty) return;
+        if (dirty) this.ids.add(id); else this.ids.delete(id);
+        this.revision += 1;
+        for (const listener of this.listeners) listener();
+      },
+      subscribe: (listener) => {
+        dirtyTabs.listeners.add(listener);
+        return () => { dirtyTabs.listeners.delete(listener); };
+      },
+      snapshot: () => dirtyTabs.revision,
+    };
+
+    // ───────────────────────────── editor tab ─────────────────────────────
+
+    const LOAD_ERROR_KEYS = { tooLarge: 'editor.tooLarge', notText: 'editor.notText', gone: 'editor.gone', failed: 'editor.loadError' };
+
+    /** Read the whole file as bytes (not lines) so line endings and the trailing newline survive a save. */
+    async function readFile(remote, sessionId, path, signal) {
+      let result;
+      try {
+        result = await remote.workspaceFiles.readBytes(
+          sessionId, path, { range: { offset: 0, length: MAX_EDIT_BYTES + 1 } }, signal);
+      } catch {
+        return { reason: 'failed' };
+      }
+      if (!result.ok) {
+        const code = result.error?.code;
+        if (code === 'workspace-file/too-large') return { reason: 'tooLarge' };
+        if (code === 'workspace-file/not-found') return { reason: 'gone' };
+        return { reason: 'failed' };
+      }
+      const { data, eof, bytes, version } = result.value;
+      if (!eof || (bytes ?? data.byteLength) > MAX_EDIT_BYTES) return { reason: 'tooLarge' };
+      const decoded = decodeText(data);
+      if (decoded.reason !== undefined) return { reason: decoded.reason };
+      return { text: decoded.text, eol: dominantEol(decoded.text), version };
+    }
+
+    function EditorBody({ props, remote, theme, t }) {
+      const { tab } = props.useTabInfo();
+      const address = parseFileAddress(tab.contentId);
+      const sessionId = address?.sessionId ?? props.sessionId;
+      const path = address?.path ?? '';
+      const name = baseName(path);
+
+      const [file, setFile] = React.useState(null);
+      const [loadError, setLoadError] = React.useState(null);
+      const [engine, setEngine] = React.useState('monaco');
+      const [dirty, setDirtyState] = React.useState(false);
+      const [save, setSave] = React.useState({ state: 'idle' });
+      const [dark, setDark] = React.useState(() => theme.getTheme().active.colorScheme === 'dark');
+      const editor = React.useRef(null);
+      const version = React.useRef('');
+
+      const key = dirtyKey(props.sessionId, tab.id);
+      const setDirty = React.useCallback((value) => {
+        setDirtyState(value);
+        dirtyTabs.set(key, value);
+        if (value) setSave((current) => (current.state === 'saved' ? { state: 'idle' } : current));
+      }, [key]);
+      React.useEffect(() => () => { dirtyTabs.set(key, false); }, [key]);
+      React.useEffect(() => {
+        const sync = () => { setDark(theme.getTheme().active.colorScheme === 'dark'); };
+        sync();
+        return theme.subscribe(sync);
+      }, [theme]);
+
+      const load = React.useCallback(async () => {
+        const loaded = await readFile(remote, sessionId, path, tab.signal);
+        if (tab.signal.aborted) return undefined;
+        if (loaded.reason !== undefined) { setLoadError(loaded.reason); return undefined; }
+        version.current = loaded.version;
+        return loaded;
+      }, [remote, sessionId, path, tab.signal]);
+
+      React.useEffect(() => {
+        let alive = true;
+        setLoadError(null);
+        load().then((loaded) => { if (alive && loaded !== undefined) setFile(loaded); });
+        return () => { alive = false; };
+      }, [load]);
+
+      const reload = React.useCallback(async () => {
+        const loaded = await load();
+        if (loaded === undefined) return;
+        setLoadError(null);
+        setSave({ state: 'idle' });
+        setFile(loaded);
+        editor.current?.setContent(loaded.text);
+        setDirty(false);
+      }, [load, setDirty]);
+
+      const confirmDiscard = React.useCallback(() => (
+        !dirtyTabs.ids.has(key) || window.confirm(t('editor.discard', { name }))
+      ), [key, t, name]);
+
+      React.useEffect(() => tab.actions.bindCommands({
+        refresh: () => { if (confirmDiscard()) reload(); },
+      }), [tab.actions, confirmDiscard, reload]);
+
+      const doSave = React.useCallback(async (force) => {
+        if (save.state === 'saving' || editor.current === null) return;
+        setSave({ state: 'saving' });
+        try {
+          const { content, token } = await editor.current.getContent();
+          const response = await fetch(new URL(SAVE_ROUTE, document.baseURI).href, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(force
+              ? { sessionId, path, content, force: true }
+              : { sessionId, path, content, expectedVersion: version.current }),
+          });
+          if (response.ok) {
+            version.current = (await response.json()).version;
+            editor.current.markSaved(token);
+            setSave({ state: 'saved' });
+            // Clicking the Save button took keyboard focus; hand it back to the text.
+            editor.current.focus();
+            return;
+          }
+          if (response.status === 409) setSave({ state: 'conflict' });
+          else if (response.status === 403) setSave({ state: 'error', key: 'editor.denied' });
+          else if (response.status === 404) setSave({ state: 'error', key: 'editor.gone' });
+          else if (response.status === 413) setSave({ state: 'error', key: 'editor.tooLarge' });
+          else setSave({ state: 'error', key: 'editor.saveError' });
+        } catch {
+          setSave({ state: 'error', key: 'editor.saveError' });
+        }
+      }, [save.state, sessionId, path]);
+
+      const onSave = React.useCallback(() => { doSave(false); }, [doSave]);
+      const onFrameFail = React.useCallback((reason) => {
+        console.warn('monaco unavailable, using plain text:', reason);
+        setEngine((current) => (current === 'monaco' ? 'text' : current));
+      }, []);
+
+      if (loadError !== null) {
+        return h('div', { className: 'dlf-ed', 'data-dlf-editor': '' },
+          h('div', { className: 'dlf-ed-msg' },
+            h('span', null, t(LOAD_ERROR_KEYS[loadError], { limit: formatBytes(MAX_EDIT_BYTES) })),
+            (loadError === 'failed' || loadError === 'gone')
+              && h('button', { type: 'button', className: 'dlf-ed-btn', onClick: () => { reload(); } }, t('editor.retry'))));
+      }
+      if (file === null) {
+        return h('div', { className: 'dlf-ed', 'data-dlf-editor': '' },
+          h('div', { className: 'dlf-ed-msg' }, t('editor.loading')));
+      }
+
+      const status = save.state === 'saving' ? { text: t('editor.saving') }
+        : save.state === 'error' ? { text: t(save.key, { limit: formatBytes(MAX_EDIT_BYTES) }), tone: 'error' }
+          : save.state === 'saved' && !dirty ? { text: t('editor.saved'), tone: 'ok' }
+            : dirty ? { text: t('editor.unsaved') } : undefined;
+
+      return h('div', { className: 'dlf-ed', 'data-dlf-editor': '' },
+        h('div', { className: 'dlf-ed-bar' },
+          h('span', { className: 'dlf-ed-name', title: path }, name, dirty && h('span', { className: 'dlf-ed-dot' }, ' ●')),
+          h('span', { className: 'dlf-ed-spacer' }),
+          status && h('span', { className: 'dlf-ed-status', 'data-tone': status.tone, role: status.tone === 'error' ? 'alert' : undefined }, status.text),
+          h('button', {
+            type: 'button',
+            className: 'dlf-ed-btn',
+            disabled: !dirty || save.state === 'saving',
+            onClick: onSave,
+          }, t('editor.save'))),
+        save.state === 'conflict' && h('div', { className: 'dlf-ed-banner', role: 'alert' },
+          h('span', null, t('editor.conflict')),
+          h('button', { type: 'button', className: 'dlf-ed-btn', onClick: () => { reload(); } }, t('editor.reload')),
+          h('button', { type: 'button', className: 'dlf-ed-btn', onClick: () => { doSave(true); } }, t('editor.overwrite')),
+          h('button', { type: 'button', className: 'dlf-ed-btn', onClick: () => { setSave({ state: 'idle' }); } }, t('editor.keep'))),
+        engine === 'text' && h('div', { className: 'dlf-ed-note' }, t('editor.plain')),
+        h('div', { className: 'dlf-ed-body' },
+          engine === 'monaco'
+            ? h(MonacoFrame, {
+              ref: editor, fileName: name, initial: file.text, dark, onDirty: setDirty, onSave, onFail: onFrameFail,
+            })
+            : h(TextEditor, { ref: editor, initial: file.text, eol: file.eol, onDirty: setDirty, onSave })));
+    }
+
+    // ───────────────────────────── plugin body ─────────────────────────────
+
     return {
-      inject: ['slots', 'locale', 'sidebarRight'],
+      inject: ['slots', 'locale', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'theme'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'download-files: dictionaries');
         ctx.effect(() => {
@@ -312,26 +754,22 @@ window.__ModuleLoader__.load({
         }, 'download-files: styles');
         const t = ctx.locale.bind(NS);
 
-        // Same primitive the stock control uses; if a future Harness stops
-        // exposing it, the editors menu degrades away and "Show files" stays.
-        let Menu;
-        try { Menu = require('@deepseek-ai/dsh-client-ui-primitives').Menu; } catch { /* no menu */ }
-
-        const cwdOf = (props) => props.useSessions((state) => state.byId[props.sessionId]?.cwd);
-        const SessionDirectoryOpen = (props) => h(DirectoryOpen, {
-          cwd: cwdOf(props), sidebarRight: ctx.sidebarRight, Menu, t,
-        });
-        const FilesTabDirectoryOpen = (props) => h(DirectoryOpen, {
-          cwd: cwdOf(props), appsOnly: true, sidebarRight: ctx.sidebarRight, Menu, t,
-        });
+        // ── download + show files ──
+        const SessionShowFiles = () => h(ShowFiles, { sidebarRight: ctx.sidebarRight, t });
+        // Inside the Files tab a "Show files" button would be a no-op: render nothing.
+        const HiddenInFilesTab = () => null;
 
         const FileRouteDownload = (props) => {
           const url = routeUrl(props.actionUrl);
           return url === undefined ? null : h(DownloadButton, { url, t });
         };
-        const PathDownload = (props) => (
-          typeof props.absolutePath === 'string'
-            ? h(DownloadButton, { url: pathUrl(props.absolutePath), t }) : null);
+        const PathActions = (props) => (typeof props.absolutePath === 'string'
+          ? h(React.Fragment, null,
+            h(EditButton, {
+              sessionId: props.sessionId, absolutePath: props.absolutePath, sidebarRight: ctx.sidebarRight, t,
+            }),
+            h(DownloadButton, { url: pathUrl(props.absolutePath), t }))
+          : null);
         const PathDownloadProminent = (props) => (
           typeof props.absolutePath === 'string'
             ? h(DownloadButton, { url: pathUrl(props.absolutePath), large: true, t }) : null);
@@ -339,7 +777,7 @@ window.__ModuleLoader__.load({
         const slots = {
           'deliverables.file.actions': FileRouteDownload,
           'deliverables.review.file.actions': FileRouteDownload,
-          'sidebar.right.tab.document.actions': PathDownload,
+          'sidebar.right.tab.document.actions': PathActions,
           'sidebar.right.tab.document.unpreviewable': PathDownloadProminent,
         };
         for (const [name, component] of Object.entries(slots)) {
@@ -350,10 +788,60 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
           name: 'conversation.session.header.utilities', id: STOCK_ID, order: -10,
           priority: -1, locale: NS,
-        }, SessionDirectoryOpen));
+        }, SessionShowFiles));
         ctx.slots.inject('sidebar.right.tab.files.actions', () => ctx.slots.register({
           name: 'sidebar.right.tab.files.actions', id: STOCK_ID, priority: -1, locale: NS,
-        }, FilesTabDirectoryOpen));
+        }, HiddenInFilesTab));
+
+        // ── sidebar editor tab ──
+        ctx.effect(() => ctx.sidebarRightTabs.register({
+          id: EDITOR_ID,
+          kind: EDITOR_KIND,
+          // Opened only on request (the Edit button); never claims files by itself.
+          priority: 'fallback',
+          // An editor must keep its unsaved text while another tab is in front.
+          keepMounted: true,
+          canOpen: (address) => parseFileAddress(address) !== undefined,
+          title: (address) => baseName(parseFileAddress(address)?.path ?? address),
+        }), 'download-files: editor tab type');
+
+        const theme = {
+          getTheme: () => ctx.theme.getTheme(),
+          subscribe: (listener) => ctx.on('theme/change', listener),
+        };
+        const Body = (props) => h(EditorBody, { props, remote: ctx.remote, theme, t });
+        ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+          name: 'sidebar.right.pane.tab', key: EDITOR_ID, locale: NS,
+        }, Body)), 'download-files: editor tab body');
+
+        const Title = ({ useTabInfo, sessionId }) => {
+          const { tab } = useTabInfo();
+          React.useSyncExternalStore(dirtyTabs.subscribe, dirtyTabs.snapshot);
+          return h(React.Fragment, null, tab.title, dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)) ? ' ●' : '');
+        };
+        ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
+          name: 'sidebar.right.pane.tab.title', key: EDITOR_ID,
+        }, Title)), 'download-files: editor tab title');
+
+        // Closing a tab with unsaved text asks first; throwing keeps the tab open.
+        ctx.effect(() => ctx.sidebarRight.registerCloseHandler(EDITOR_KIND, (sessionId, tab) => {
+          const key = dirtyKey(sessionId, tab.id);
+          if (dirtyTabs.ids.has(key)
+            && !window.confirm(t('editor.discard', { name: tab.title.replace(/ ●$/, '') }))) {
+            throw new Error('close cancelled: unsaved changes');
+          }
+          dirtyTabs.set(key, false);
+        }), 'download-files: editor close guard');
+
+        ctx.effect(() => {
+          const guard = (event) => {
+            if (dirtyTabs.ids.size === 0) return;
+            event.preventDefault();
+            event.returnValue = '';
+          };
+          window.addEventListener('beforeunload', guard);
+          return () => { window.removeEventListener('beforeunload', guard); };
+        }, 'download-files: unload guard');
       },
     };
   },

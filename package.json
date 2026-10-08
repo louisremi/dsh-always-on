@@ -1,12 +1,15 @@
 {
   "name": "@louisremi/dsh-docker-adapter",
-  "version": "0.2.1",
-  "description": "DeepSeek Harness plugin: replaces the \"Show file location\" buttons with \"Download file\" buttons, for Harnesses running on a remote host (NAS, Docker, server).",
+  "version": "0.3.0",
+  "description": "DeepSeek Harness plugin for Harnesses running on a remote host (NAS, Docker, server): download buttons instead of \"Show file location\", a \"Show files\" shortcut, and an in-sidebar Monaco file editor.",
   "keywords": [
+    "deepseek-harness",
+    "docker",
+    "download",
     "dsh",
     "dsh-plugin",
-    "deepseek-harness",
-    "download"
+    "editor",
+    "monaco"
   ],
   "license": "MIT",
   "author": "louisremi",
@@ -29,6 +32,7 @@
   "files": [
     "index.js",
     "download-route.js",
+    "save-route.js",
     "client.js",
     "cordis.patch.yml",
     "locale",
@@ -37,8 +41,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check index.js && node --check download-route.js && node --check client.js",
-    "test": "node --test \"test/*.test.js\""
+    "check": "node --check index.js && node --check download-route.js && node --check save-route.js && node --check client.js",
+    "test": "node --test \"test/*.test.js\"",
+    "test:e2e": "node e2e/browser.e2e.mjs"
   },
   "publishConfig": {
     "access": "public",
