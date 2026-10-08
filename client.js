@@ -119,6 +119,7 @@ window.__ModuleLoader__.load({
 .dlf-ed-body{position:relative;flex:1;min-height:0}
 .dlf-ed-frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent}
 .dlf-ed-text{position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;margin:0;padding:8px 10px;resize:none;border:0;outline:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;tab-size:4;white-space:pre}
+.dlf-ed-titleIcon{flex:none}
 .dlf-ed-msg{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px 12px;color:var(--dsw-alias-label-secondary)}
 `;
 
@@ -821,10 +822,20 @@ window.__ModuleLoader__.load({
           name: 'sidebar.right.pane.tab', key: EDITOR_ID, locale: NS,
         }, Body)), 'download-files: editor tab body');
 
+        // Same icon as the stock preview tab: FileTypeIcon + classifyFileType from the
+        // shared primitives. If a future Harness stops exposing them, the tab simply
+        // shows no icon rather than failing.
+        let primitives;
+        try { primitives = require('@deepseek-ai/dsh-client-ui-primitives'); } catch { /* no icon */ }
+        const FileTypeIcon = primitives?.FileTypeIcon;
+        const classifyFileType = primitives?.classifyFileType;
         const Title = ({ useTabInfo, sessionId }) => {
           const { tab } = useTabInfo();
           React.useSyncExternalStore(dirtyTabs.subscribe, dirtyTabs.snapshot);
-          return h(React.Fragment, null, tab.title, dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)) ? ' ●' : '');
+          const icon = FileTypeIcon && classifyFileType
+            ? h(FileTypeIcon, { kind: classifyFileType(tab.title), size: 16, className: 'dlf-ed-titleIcon' })
+            : null;
+          return h(React.Fragment, null, icon, tab.title, dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)) ? ' ●' : '');
         };
         ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
           name: 'sidebar.right.pane.tab.title', key: EDITOR_ID,

@@ -45,7 +45,7 @@ const hostCtx = {
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
 :root{--dsw-alias-bg-layer-1:#fff;--dsw-alias-label-primary:#111;--dsw-alias-border-l2:#ccc}
 html,body{margin:0;height:100%} #root{width:600px;height:500px}</style></head><body><div id="root"></div>
-<script src="/react.js"></script><script src="/react-dom.js"></script>
+<script src="/react.js"></script><script src="/react-dom.js"></script><script src="/ft.js"></script>
 <script>window.__regs=[];window.__opened=[];window.__closeHandlers={};window.__tabTypes=[];
 window.__ModuleLoader__={load:(m)=>{window.__mod=m;}};</script>
 <script src="/client.js"></script>
@@ -62,18 +62,39 @@ const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
    const j=await r.json(); const bin=atob(j.b64); const data=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)data[i]=bin.charCodeAt(i);
    return {ok:true,value:{data,eof:true,bytes:data.length,version:j.version,absolutePath:path}};}}},
  slots:{inject:(n,f)=>f(),register:(o,c)=>{window.__regs.push([o,c]);}}};
-const exp=window.__mod.factory((s)=>{if(s==='react')return window.React;throw new Error(s)});
+const exp=window.__mod.factory((s)=>{if(s==='react')return window.React;if(s==='@deepseek-ai/dsh-client-ui-primitives'){if(params.get('prim')==='none'||!window.__ft)throw new Error('missing');return window.__ft;}throw new Error(s)});
 exp.apply(ctx);
 const reg=(name,key)=>window.__regs.find(([o])=>o.name===name&&(key===undefined||o.key===key))[1];
 const h=React.createElement;
 const info={tab:{id:'tab1',contentId:params.get('addr'),title:'x',signal:new AbortController().signal,actions:{bindCommands:()=>()=>{}}}};
+window.__mountTitles=(titles)=>{
+  const Title=reg('sidebar.right.pane.tab.title','@louisremi/dsh-docker-adapter/editor');
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',null,...titles.map((title,i)=>h('div',{key:i,'data-title':title,style:{display:'flex',gap:6,alignItems:'center',height:24}},h(Title,{useTabInfo:()=>({tab:{id:'t'+i,title}}),sessionId:'sess'})))));
+};
 window.__mount=(what)=>{
   const root=ReactDOM.createRoot(document.getElementById('root'));
   if(what==='editor') root.render(h(reg('sidebar.right.pane.tab',Object.keys({})[0]||'@louisremi/dsh-docker-adapter/editor'),{useTabInfo:()=>info,sessionId:'sess'}));
   else root.render(h(reg('sidebar.right.tab.document.actions'),{sessionId:'sess',absolutePath:params.get('abs')}));
 };
-window.__mount(params.get('what'));
+if(params.get('what')==='titles')window.__mountTitles((params.get('t')||'').split('|'));else window.__mount(params.get('what'));
 </script></body></html>`;
+
+// The real FileTypeIcon + classifyFileType source, cut out of the installed Harness' primitives
+// bundle (its CSS-module/jsx helpers are shimmed). Absent => the icon test is skipped.
+const PRIMITIVES = process.env.DSH_PRIMITIVES ?? '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-primitives/lib/index.js';
+let ftModule;
+try {
+  const lines = readFileSync(PRIMITIVES, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('//#region lib/types/code-file-icon-artwork.js'));
+  const to = lines.findIndex((l) => l.startsWith('//#region lib/types/SiteGlyph.js'));
+  if (from < 0 || to < from) throw new Error('layout changed');
+  ftModule = `const React = window.React; const { useId, useMemo, useRef, useState, useEffect } = React;
+const jsx = (type, props, key) => { const { children, ...rest } = props ?? {}; return React.createElement(type, key === undefined ? rest : { ...rest, key }, ...(children === undefined ? [] : [].concat(children))); };
+const jsxs = jsx; const clsx = (...a) => a.flat(9).filter((x) => typeof x === 'string' && x).join(' ');
+const css$20 = new Proxy({}, { get: (_, k) => 'ft-' + String(k) }); const css$21 = css$20; const css$19 = css$20; const css$18 = css$20;
+${lines.slice(from, to).join('\n')}
+window.__ft = { FileTypeIcon, classifyFileType };`;
+} catch { ftModule = undefined; }
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -81,6 +102,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/') return send(200, PAGE, 'text/html');
   if (url.pathname === '/react.js') return send(200, readFileSync(REACT_UMD), 'text/javascript');
   if (url.pathname === '/react-dom.js') return send(200, readFileSync(REACT_DOM_UMD), 'text/javascript');
+  if (url.pathname === '/ft.js') return send(200, ftModule ?? '', 'text/javascript');
   if (url.pathname === '/client.js') return send(200, readFileSync(new URL('../client.js', import.meta.url)), 'text/javascript');
   if (url.pathname === '/fs/read') {
     const p = url.searchParams.get('path');
@@ -296,6 +318,31 @@ await check('save 404 from our handler (file really gone) still says the file no
   await page.keyboard.type('x');
   await page.keyboard.press('Control+s');
   await page.waitForFunction(() => /editor\.gone/.test(document.querySelector('.dlf-ed-status')?.textContent ?? ''), null, { timeout: 8000 });
+});
+
+await check('editor tab title shows the stock file-type icon (FileTypeIcon + classifyFileType) per file type', async (page) => {
+  if (ftModule === undefined) { results.push(['SKIP', 'editor tab icons (Harness primitives not found at ' + PRIMITIVES + ')']); return; }
+  const names = ['.gitignore', 'README.md', 'package.json', 'client.js', 'cordis.patch.yml', 'notes.txt', 'Dockerfile'];
+  await page.goto(`${base}/?what=titles&t=${encodeURIComponent(names.join('|'))}`);
+  await page.waitForSelector('[data-title] svg');
+  const rows = await page.$$eval('[data-title]', (els) => els.map((e) => ({
+    title: e.dataset.title, svg: !!e.querySelector('svg'), size: e.querySelector('svg')?.getAttribute('width'),
+    cls: e.querySelector('svg')?.getAttribute('class') ?? '',
+    own: [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(''),
+  })));
+  for (const r of rows) {
+    assert.ok(r.svg && r.size === '16' && /dlf-ed-titleIcon/.test(r.cls), `${r.title}: 16px icon with our class`);
+    assert.equal(r.own, r.title, `${r.title}: title text unchanged`);
+  }
+  const looks = await page.$$eval('[data-title] svg', (s) => new Set(s.map((x) => x.innerHTML.length + ':' + x.getAttribute('class'))).size);
+  assert.ok(looks > 2, 'icons differ by file type');
+});
+
+await check('editor tab title degrades to text only when the primitives are unavailable', async (page) => {
+  await page.goto(`${base}/?what=titles&prim=none&t=${encodeURIComponent('a.js|b.md')}`);
+  await page.waitForSelector('[data-title]');
+  const bare = await page.$$eval('[data-title]', (els) => els.map((e) => ({ svg: !!e.querySelector('svg'), text: e.textContent })));
+  assert.deepEqual(bare, [{ svg: false, text: 'a.js' }, { svg: false, text: 'b.md' }]);
 });
 
 await browser.close();
