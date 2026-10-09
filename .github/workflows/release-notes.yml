@@ -1,0 +1,29 @@
+name: Release notes
+
+# Fills an empty release description with GitHub's automatically generated
+# release notes (everything merged since the previous release). The repo
+# lands changes as pull requests so the generator has content to work with;
+# `.github/release.yml` controls the categorization.
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate the release description
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)"
+          if [ -n "$body" ]; then
+            echo "Release already has a description; leaving it as is."
+            exit 0
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --generate-notes

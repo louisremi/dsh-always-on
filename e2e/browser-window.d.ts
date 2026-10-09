@@ -10,7 +10,10 @@ declare global {
     /** sidebarRightTabs.register pushes the tab-type descriptors here. */
     __tabTypes: { kind?: string; priority?: string; keepMounted?: boolean; patterns?: unknown }[];
     /** sidebarRight.registerCloseHandler stores handlers by tab kind here. */
-    __closeHandlers: Record<string, (sessionId: string, tab: { id: string; title: string }) => void>;
+    __closeHandlers: Record<
+      string,
+      (sessionId: string, tab: { id: string; title: string }) => void
+    >;
   }
 }
 

@@ -1,19 +1,35 @@
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handleDownload, contentDisposition, registerDownloadRoute, CHUNK_BYTES } from '../src/download-route.ts';
+import { test } from 'node:test';
 import type { DownloadContext, DownloadRegisterContext, FetchRoute } from '../src/context.ts';
+import {
+  CHUNK_BYTES,
+  contentDisposition,
+  handleDownload,
+  registerDownloadRoute,
+} from '../src/download-route.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-'));
 const big = join(dir, 'big file é.bin');
 const bigBytes = Buffer.alloc(CHUNK_BYTES * 2 + 123, 7);
-bigBytes[0] = 1; bigBytes[bigBytes.length - 1] = 9;
+bigBytes[0] = 1;
+bigBytes[bigBytes.length - 1] = 9;
 writeFileSync(big, bigBytes);
 mkdirSync(join(dir, 'sub'));
 
-function denied() { return Object.assign(new Error('denied'), { code: 'FS_SANDBOX_DENIED' }); }
+function denied() {
+  return Object.assign(new Error('denied'), { code: 'FS_SANDBOX_DENIED' });
+}
 
 /** A fake Host context backed by the real filesystem. */
 function fakeCtx(): DownloadContext {
@@ -28,7 +44,9 @@ function fakeCtx(): DownloadContext {
         try {
           const s = statSync(t.displayPath!);
           return { type: s.isFile() ? 'file' : 'directory', size: s.size };
-        } catch { return undefined; }
+        } catch {
+          return undefined;
+        }
       },
       async readByteRange(t, { offset, length }) {
         const fd = openSync(t.displayPath!, 'r');
@@ -36,7 +54,9 @@ function fakeCtx(): DownloadContext {
           const buf = Buffer.alloc(length);
           const n = readSync(fd, buf, 0, length, offset);
           return buf.subarray(0, n);
-        } finally { closeSync(fd); }
+        } finally {
+          closeSync(fd);
+        }
       },
     },
     sandboxPolicy: { workspaceRoot: dir },
@@ -48,9 +68,14 @@ function fakeCtx(): DownloadContext {
         };
       },
     },
-    workspaceFiles: { async stat(_scope: unknown, path: string) { return { absolutePath: join(dir, path) }; } },
+    workspaceFiles: {
+      async stat(_scope: unknown, path: string) {
+        return { absolutePath: join(dir, path) };
+      },
+    },
     workspaceChanges: {
-      summary: (id: string, seq: number) => (seq === 1 ? { cwd: dir, files: [{ path: 'big file é.bin' }] } : undefined),
+      summary: (_id: string, seq: number) =>
+        seq === 1 ? { cwd: dir, files: [{ path: 'big file é.bin' }] } : undefined,
     },
   };
 }
@@ -64,7 +89,10 @@ test('streams a multi-chunk file by path with attachment headers', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-length'), String(bigBytes.length));
   assert.equal(res.headers.get('content-type'), 'application/octet-stream');
-  assert.match(res.headers.get('content-disposition')!, /^attachment; filename="big file _\.bin"; filename\*=UTF-8''big%20file%20%C3%A9\.bin$/);
+  assert.match(
+    res.headers.get('content-disposition')!,
+    /^attachment; filename="big file _\.bin"; filename\*=UTF-8''big%20file%20%C3%A9\.bin$/,
+  );
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), bigBytes);
 });
 
@@ -91,23 +119,45 @@ test('error statuses', async () => {
   assert.equal((await get(ctx, q({ path: 'relative' }))).status, 400);
   assert.equal((await get(ctx, '')).status, 400);
   assert.equal((await get(ctx, q({ path: '/etc/passwd' }))).status, 422);
-  assert.equal((await get(ctx, q({ source: 'present', sessionId: 's', seq: 'x', index: '0' }))).status, 400);
-  assert.equal((await get(ctx, q({ source: 'changes', sessionId: 's', seq: '2', index: '0' }))).status, 404);
-  assert.equal((await get(ctx, q({ source: 'nope', sessionId: 's', seq: '1', index: '0' }))).status, 400);
+  assert.equal(
+    (await get(ctx, q({ source: 'present', sessionId: 's', seq: 'x', index: '0' }))).status,
+    400,
+  );
+  assert.equal(
+    (await get(ctx, q({ source: 'changes', sessionId: 's', seq: '2', index: '0' }))).status,
+    404,
+  );
+  assert.equal(
+    (await get(ctx, q({ source: 'nope', sessionId: 's', seq: '1', index: '0' }))).status,
+    400,
+  );
 });
 
 test('contentDisposition strips separators, quotes and control characters', () => {
   const v = contentDisposition('a/b"c\n;d.txt');
   assert.ok(!/[\n/]/.test(v.split(';')[1]));
   assert.match(v, /^attachment; filename="a_b_c_;?/);
-  assert.equal(contentDisposition(''), 'attachment; filename="download"; filename*=UTF-8\'\'download');
+  assert.equal(
+    contentDisposition(''),
+    'attachment; filename="download"; filename*=UTF-8\'\'download',
+  );
 });
 
 test('registerDownloadRoute registers GET/HEAD and disposes', async () => {
-  let route: FetchRoute | undefined; let removed = false;
+  let route: FetchRoute | undefined;
+  let removed = false;
   const ctx: DownloadRegisterContext = {
     ...fakeCtx(),
-    connection: { fetch: { register(r) { route = r; return () => { removed = true; }; } } },
+    connection: {
+      fetch: {
+        register(r) {
+          route = r;
+          return () => {
+            removed = true;
+          };
+        },
+      },
+    },
   };
   const dispose = registerDownloadRoute(ctx);
   assert.ok(route);

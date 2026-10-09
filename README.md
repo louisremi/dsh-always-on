@@ -76,14 +76,11 @@ dsh plugin --profile web remove @louisremi/dsh-always-on
 
 ## Releasing
 
-Bump `version` in `package.json` (`npm version patch`), push, then publish a GitHub Release whose tag matches (`gh release create vX.Y.Z --generate-notes`). A workflow **stages** the package on npm (no 2FA needed in CI); it needs a stage-only `NPM_TOKEN` repository secret.
+Changes land on `main` as pull requests, so each GitHub Release can describe itself: create a release with an empty description and the **Release notes** workflow fills it from everything merged since the previous release (`.github/release.yml` controls the categorization).
 
-The maintainer then publishes the staged version with proof-of-presence:
-
-```sh
-npm stage list @louisremi/dsh-always-on
-npm stage approve <stage-id>
-```
+1. Bump `version` in `package.json` and push (via PR).
+2. Publish a GitHub Release whose tag matches the version: `gh release create vX.Y.Z`.
+3. The **Publish to npm** workflow then runs on release publish: it checks the tag against `package.json`, lints, type-checks, tests, and publishes to npm with provenance through [trusted publishing](https://docs.npmjs.com/trusted-publishers) — no tokens stored in the repo.
 
 ## License
 
