@@ -1,4 +1,4 @@
-import { isAbsolute, basename } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
 import type { DownloadContext, DownloadRegisterContext } from './context.ts';
 
 export const DOWNLOAD_PATH = '/api/download.file';
@@ -22,11 +22,16 @@ function coordinate(value: string | null): number | undefined {
 
 /** Content-Disposition value with an ASCII fallback and an RFC 5987 UTF-8 name. */
 export function contentDisposition(name: string): string {
-  const clean = [...name].filter((c) => c.charCodeAt(0) >= 32 && c.charCodeAt(0) !== 127)
-    .join('').replace(/[\\/]/g, '_') || 'download';
+  const clean =
+    [...name]
+      .filter((c) => c.charCodeAt(0) >= 32 && c.charCodeAt(0) !== 127)
+      .join('')
+      .replace(/[\\/]/g, '_') || 'download';
   const ascii = clean.replace(/[^\x20-\x7e]/g, '_').replace(/["%;]/g, '_');
-  const encoded = encodeURIComponent(clean).replace(/['()*]/g, (c) =>
-    `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  const encoded = encodeURIComponent(clean).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
@@ -44,23 +49,35 @@ interface RemoteErrorShape {
 
 function remoteCode(error: unknown): unknown {
   return typeof error === 'object' && error !== null
-    ? ((error as RemoteErrorShape).remote?.code
-      ?? (error as RemoteErrorShape).code
-      ?? (error as RemoteErrorShape).data?.code)
+    ? ((error as RemoteErrorShape).remote?.code ??
+        (error as RemoteErrorShape).code ??
+        (error as RemoteErrorShape).data?.code)
     : undefined;
 }
 
 export function failureStatus(error: unknown): number {
   const code = String(remoteCode(error) ?? '');
-  if (code === 'session/not-found' || code === 'workspace-file/not-found'
-    || code === 'SESSION_QUERY_SESSION_NOT_FOUND' || code === 'SESSION_QUERY_EVENT_NOT_FOUND'
-    || code === 'FS_NOT_FOUND' || code === 'ENOENT' || code === 'ENOTDIR') return 404;
+  if (
+    code === 'session/not-found' ||
+    code === 'workspace-file/not-found' ||
+    code === 'SESSION_QUERY_SESSION_NOT_FOUND' ||
+    code === 'SESSION_QUERY_EVENT_NOT_FOUND' ||
+    code === 'FS_NOT_FOUND' ||
+    code === 'ENOENT' ||
+    code === 'ENOTDIR'
+  )
+    return 404;
   if (code === 'FS_STALE_VERSION' || code === 'FS_NOT_OBSERVED') return 409;
   if (code === 'FS_TOO_LARGE' || code === 'workspace-file/too-large') return 413;
   if (code === 'FS_NOT_TEXT') return 415;
-  if (code === 'workspace-file/not-regular-file' || code === 'workspace-file/outside-workspace'
-    || code === 'FS_NOT_REGULAR_FILE' || code === 'FS_PERMISSION_DENIED'
-    || code === 'FS_SANDBOX_DENIED') return 403;
+  if (
+    code === 'workspace-file/not-regular-file' ||
+    code === 'workspace-file/outside-workspace' ||
+    code === 'FS_NOT_REGULAR_FILE' ||
+    code === 'FS_PERMISSION_DENIED' ||
+    code === 'FS_SANDBOX_DENIED'
+  )
+    return 403;
   return 500;
 }
 
@@ -74,7 +91,8 @@ async function locate(
   if (source === null) {
     const path = query.get('path');
     if (path === null || path.length === 0) return text(400, 'missing path', request.method);
-    if (path.includes('\0') || !isAbsolute(path)) return text(400, 'absolute path required', request.method);
+    if (path.includes('\0') || !isAbsolute(path))
+      return text(400, 'absolute path required', request.method);
     return path;
   }
   const id = query.get('sessionId');
@@ -85,14 +103,18 @@ async function locate(
   }
   if (source === 'present') {
     const read = await ctx.sessionQuery.readEvent(
-      { sessionId: id, seq, before: 0, after: 0 }, request.signal);
+      { sessionId: id, seq, before: 0, after: 0 },
+      request.signal,
+    );
     const { target, session } = read;
     const files = target.type === 'deliverables/presented' ? target.data?.files : undefined;
     const file = Array.isArray(files) ? files[index] : undefined;
     if (!isPresentedFile(file)) return text(404, 'presented file not found', request.method);
     const { absolutePath } = await ctx.workspaceFiles.stat(
       { sessionId: id, workspaceRoot: session.cwd ?? ctx.sandboxPolicy.workspaceRoot },
-      file.path, request.signal);
+      file.path,
+      request.signal,
+    );
     return absolutePath;
   }
   if (source === 'changes') {
@@ -101,7 +123,10 @@ async function locate(
     const file = summary.files[index];
     if (file === undefined) return text(404, 'changed file not found', request.method);
     const { absolutePath } = await ctx.workspaceFiles.stat(
-      { sessionId: id, workspaceRoot: summary.cwd }, file.path, request.signal);
+      { sessionId: id, workspaceRoot: summary.cwd },
+      file.path,
+      request.signal,
+    );
     return absolutePath;
   }
   return text(400, 'invalid source', request.method);
@@ -140,9 +165,15 @@ export async function handleDownload(ctx: DownloadContext, request: Request): Pr
     const body = new ReadableStream({
       async pull(controller) {
         try {
-          if (size !== undefined && offset >= size) { controller.close(); return; }
+          if (size !== undefined && offset >= size) {
+            controller.close();
+            return;
+          }
           const chunk = await fs.readByteRange(
-            target, { offset, length: CHUNK_BYTES }, request.signal);
+            target,
+            { offset, length: CHUNK_BYTES },
+            request.signal,
+          );
           if (chunk.byteLength === 0) {
             if (size !== undefined) throw new Error('file shrank while downloading');
             controller.close();
@@ -172,9 +203,13 @@ export function registerDownloadRoute(ctx: DownloadRegisterContext): () => Promi
     requestBody: 'buffered',
     fetch: (request) => {
       const task = handleDownload(
-        ctx, new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) }));
+        ctx,
+        new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) }),
+      );
       pending.add(task);
-      const done = () => { pending.delete(task); };
+      const done = () => {
+        pending.delete(task);
+      };
       task.then(done, done);
       return task;
     },

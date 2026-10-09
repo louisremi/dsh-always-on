@@ -101,7 +101,9 @@ export interface LiveSession {
 }
 
 export interface SessionPersistence {
-  stat(sessionId: string): Promise<{ header?: { cwd?: string | undefined } | undefined } | undefined>;
+  stat(
+    sessionId: string,
+  ): Promise<{ header?: { cwd?: string | undefined } | undefined } | undefined>;
 }
 
 export interface DownloadContext {

@@ -36,6 +36,7 @@ interface DlfAmdRequire {
 // dsh serves to the browser), so these top-level declarations are global:
 // the interface below merges with lib.dom's `Window`, giving
 // `window.__ModuleLoader__` its type.
+// biome-ignore lint/correctness/noUnusedVariables: declaration merging — nothing here references Window by name
 interface Window {
   __ModuleLoader__: DlfModuleLoader;
   /** Set by the sandboxed iframe's own worker bootstrap; `monaco` by the AMD loader there. */
@@ -70,10 +71,12 @@ window.__ModuleLoader__.load({
     const MONACO_VERSION = '0.52.2';
     const MONACO_ORIGIN = 'https://cdn.jsdelivr.net';
     const MONACO_BASE = `${MONACO_ORIGIN}/npm/monaco-editor@${MONACO_VERSION}/min/vs`;
-    const MONACO_LOADER_SRI = 'sha384-pHG02SG8pId94Np3AbPmBEJ1yPqaH0IkJGLSNGXYmuGhkazT8Lr/57WYpbkGjJtu';
+    const MONACO_LOADER_SRI =
+      'sha384-pHG02SG8pId94Np3AbPmBEJ1yPqaH0IkJGLSNGXYmuGhkazT8Lr/57WYpbkGjJtu';
 
     /** Extensions the editor never offers (the editor also refuses binary content itself). */
-    const BINARY_EXTENSIONS = /\.(png|jpe?g|gif|webp|avif|bmp|ico|tiff?|heic|pdf|docx?|xlsx?|pptx?|odt|ods|odp|zip|gz|tgz|bz2|xz|7z|rar|tar|jar|war|exe|dll|so|dylib|bin|class|o|a|wasm|mp3|mp4|m4a|mov|avi|mkv|webm|wav|flac|ogg|woff2?|ttf|otf|eot|sqlite3?|db|pyc|iso|dmg)$/i;
+    const BINARY_EXTENSIONS =
+      /\.(png|jpe?g|gif|webp|avif|bmp|ico|tiff?|heic|pdf|docx?|xlsx?|pptx?|odt|ods|odp|zip|gz|tgz|bz2|xz|7z|rar|tar|jar|war|exe|dll|so|dylib|bin|class|o|a|wasm|mp3|mp4|m4a|mov|avi|mkv|webm|wav|flac|ogg|woff2?|ttf|otf|eot|sqlite3?|db|pyc|iso|dmg)$/i;
 
     type Translate = (key: string, params?: Record<string, unknown>) => string;
 
@@ -97,9 +100,10 @@ window.__ModuleLoader__.load({
       'editor.notText': 'This file is not editable text.',
       'editor.loadError': 'Could not open the file.',
       'editor.saveError': 'Could not save the file.',
-      'editor.denied': 'Saving is not permitted in this session\'s sandbox mode.',
+      'editor.denied': "Saving is not permitted in this session's sandbox mode.",
       'editor.gone': 'The file no longer exists.',
-      'editor.noRoute': 'Saving is unavailable: the Harness has no save route (restart the Harness to load the updated plugin).',
+      'editor.noRoute':
+        'Saving is unavailable: the Harness has no save route (restart the Harness to load the updated plugin).',
       'editor.retry': 'Try again',
     };
     const zh = {
@@ -159,34 +163,51 @@ window.__ModuleLoader__.load({
     // ───────────────────────────── icons ─────────────────────────────
 
     function Svg({ size, children }: { size: number; children?: any }) {
-      return h('svg', {
-        width: size, height: size, viewBox: '0 0 16 16', fill: 'none',
-        'aria-hidden': 'true', strokeWidth: 1,
-      }, children);
+      return h(
+        'svg',
+        {
+          width: size,
+          height: size,
+          viewBox: '0 0 16 16',
+          fill: 'none',
+          'aria-hidden': 'true',
+          strokeWidth: 1,
+        },
+        children,
+      );
     }
 
     function DownloadIcon({ size }: { size: number }) {
-      return h(Svg, { size },
+      return h(
+        Svg,
+        { size },
         h('path', { d: 'M8 1.95317V10.0469', stroke: 'currentColor' }),
         h('path', { d: 'M4.25 6.29688L8 10.0469L11.75 6.29688', stroke: 'currentColor' }),
         h('path', {
           d: 'M1.5 10.0469V13.158C1.5 13.3937 1.60536 13.6198 1.79289 13.7865C1.98043 13.9532 2.23478 14.0469 2.5 14.0469H13.5C13.7652 14.0469 14.0196 13.9532 14.2071 13.7865C14.3946 13.6198 14.5 13.3937 14.5 13.158V10.0469',
           stroke: 'currentColor',
-        }));
+        }),
+      );
     }
 
     function FilesIcon({ size }: { size: number }) {
-      return h(Svg, { size },
+      return h(
+        Svg,
+        { size },
         h('path', {
           d: 'M1.5 3.5C1.5 2.948 1.948 2.5 2.5 2.5H6L7.5 4.25H13.5C14.052 4.25 14.5 4.698 14.5 5.25V12.5C14.5 13.052 14.052 13.5 13.5 13.5H2.5C1.948 13.5 1.5 13.052 1.5 12.5V3.5Z',
           stroke: 'currentColor',
-        }));
+        }),
+      );
     }
 
     function EditIcon({ size }: { size: number }) {
-      return h(Svg, { size },
+      return h(
+        Svg,
+        { size },
         h('path', { d: 'M10.5 2.5L13.5 5.5L5.5 13.5H2.5V10.5L10.5 2.5Z', stroke: 'currentColor' }),
-        h('path', { d: 'M9 4L12 7', stroke: 'currentColor' }));
+        h('path', { d: 'M9 4L12 7', stroke: 'currentColor' }),
+      );
     }
 
     // ─────────────────────────── file addresses ───────────────────────────
@@ -213,11 +234,17 @@ window.__ModuleLoader__.load({
     /** { sessionId, path } of a session file address, or undefined. */
     function parseFileAddress(address: unknown): { sessionId: string; path: string } | undefined {
       try {
-        if (typeof address !== 'string' || !address.startsWith(FILE_ADDRESS_PREFIX)) return undefined;
+        if (typeof address !== 'string' || !address.startsWith(FILE_ADDRESS_PREFIX))
+          return undefined;
         const end = address.search(/[?#]/);
-        const [scope, id, ...segments] = address.slice(FILE_ADDRESS_PREFIX.length, end === -1 ? undefined : end).split('/');
+        const [scope, id, ...segments] = address
+          .slice(FILE_ADDRESS_PREFIX.length, end === -1 ? undefined : end)
+          .split('/');
         if (scope !== 'session' || !id || segments.length === 0) return undefined;
-        return { sessionId: decodeURIComponent(id), path: segments.map(decodeURIComponent).join('/') };
+        return {
+          sessionId: decodeURIComponent(id),
+          path: segments.map(decodeURIComponent).join('/'),
+        };
       } catch {
         return undefined;
       }
@@ -254,7 +281,12 @@ window.__ModuleLoader__.load({
     function DownloadButton({ url, large, t }: { url: string; large?: boolean; t: Translate }) {
       const [state, setState] = React.useState('idle');
       const timer = React.useRef(undefined);
-      React.useEffect(() => () => { clearTimeout(timer.current); }, []);
+      React.useEffect(
+        () => () => {
+          clearTimeout(timer.current);
+        },
+        [],
+      );
       const label = state === 'error' ? t('download.error') : t('download.title');
       const onClick = async () => {
         if (state === 'busy') return;
@@ -266,23 +298,34 @@ window.__ModuleLoader__.load({
           return;
         }
         setState('error');
-        timer.current = setTimeout(() => { setState('idle'); }, ERROR_MS);
+        timer.current = setTimeout(() => {
+          setState('idle');
+        }, ERROR_MS);
       };
       const size = large ? 18 : 13;
-      return h('div', {
-        className: 'dlf-split',
-        'data-size': large ? 'large' : 'compact',
-        'data-download-file': '',
-        'data-error': state === 'error' ? '' : undefined,
-      }, h('button', {
-        type: 'button',
-        className: 'dlf-main',
-        disabled: state === 'busy',
-        title: label,
-        'aria-label': large ? undefined : label,
-        role: state === 'error' ? 'alert' : undefined,
-        onClick,
-      }, h(DownloadIcon, { size }), large && h('span', null, label)));
+      return h(
+        'div',
+        {
+          className: 'dlf-split',
+          'data-size': large ? 'large' : 'compact',
+          'data-download-file': '',
+          'data-error': state === 'error' ? '' : undefined,
+        },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dlf-main',
+            disabled: state === 'busy',
+            title: label,
+            'aria-label': large ? undefined : label,
+            role: state === 'error' ? 'alert' : undefined,
+            onClick,
+          },
+          h(DownloadIcon, { size }),
+          large && h('span', null, label),
+        ),
+      );
     }
 
     /**
@@ -292,49 +335,82 @@ window.__ModuleLoader__.load({
      */
     function ShowFiles({ sidebarRight, t }: { sidebarRight: SidebarRight; t: Translate }) {
       const label = t('files.show');
-      return h('div', { className: 'dlf-split', 'data-size': 'compact', 'data-show-files': '' },
-        h('button', {
-          type: 'button',
-          className: 'dlf-main',
-          title: label,
-          'aria-label': label,
-          onClick: () => {
-            try { sidebarRight.openTab('files'); } catch (error) {
-              console.warn('show files rejected:', error);
-            }
+      return h(
+        'div',
+        { className: 'dlf-split', 'data-size': 'compact', 'data-show-files': '' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dlf-main',
+            title: label,
+            'aria-label': label,
+            onClick: () => {
+              try {
+                sidebarRight.openTab('files');
+              } catch (error) {
+                console.warn('show files rejected:', error);
+              }
+            },
           },
-        }, h(FilesIcon, { size: 13 })));
+          h(FilesIcon, { size: 13 }),
+        ),
+      );
     }
 
     /** Opens a previewed file in the sidebar editor tab. */
-    function EditButton({ sessionId, absolutePath, sidebarRight, t }: {
-      sessionId?: unknown; absolutePath?: unknown; sidebarRight: SidebarRight; t: Translate;
+    function EditButton({
+      sessionId,
+      absolutePath,
+      sidebarRight,
+      t,
+    }: {
+      sessionId?: unknown;
+      absolutePath?: unknown;
+      sidebarRight: SidebarRight;
+      t: Translate;
     }) {
-      if (typeof sessionId !== 'string' || typeof absolutePath !== 'string'
-        || BINARY_EXTENSIONS.test(absolutePath)) return null;
+      if (
+        typeof sessionId !== 'string' ||
+        typeof absolutePath !== 'string' ||
+        BINARY_EXTENSIONS.test(absolutePath)
+      )
+        return null;
       const label = t('edit.title');
-      return h('div', { className: 'dlf-split', 'data-size': 'compact', 'data-edit-file': '' },
-        h('button', {
-          type: 'button',
-          className: 'dlf-main',
-          title: label,
-          'aria-label': label,
-          onClick: () => {
-            try {
-              sidebarRight.openResource(sessionFileAddress(sessionId, absolutePath), { kind: EDITOR_KIND });
-            } catch (error) {
-              console.warn('edit file rejected:', error);
-            }
+      return h(
+        'div',
+        { className: 'dlf-split', 'data-size': 'compact', 'data-edit-file': '' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dlf-main',
+            title: label,
+            'aria-label': label,
+            onClick: () => {
+              try {
+                sidebarRight.openResource(sessionFileAddress(sessionId, absolutePath), {
+                  kind: EDITOR_KIND,
+                });
+              } catch (error) {
+                console.warn('edit file rejected:', error);
+              }
+            },
           },
-        }, h(EditIcon, { size: 13 })));
+          h(EditIcon, { size: 13 }),
+        ),
+      );
     }
 
     /** Download URL for a stock `api/present.open|changes.open?…` action URL. */
     function routeUrl(actionUrl: unknown): string | undefined {
       if (typeof actionUrl !== 'string') return undefined;
       const from = new URL(actionUrl, document.baseURI);
-      const source = from.pathname.endsWith('/changes.open') ? 'changes'
-        : from.pathname.endsWith('/present.open') ? 'present' : undefined;
+      const source = from.pathname.endsWith('/changes.open')
+        ? 'changes'
+        : from.pathname.endsWith('/present.open')
+          ? 'present'
+          : undefined;
       if (source === undefined) return undefined;
       const to = new URL(ROUTE, document.baseURI);
       to.searchParams.set('source', source);
@@ -361,14 +437,16 @@ window.__ModuleLoader__.load({
     }
 
     const toLf = (text: string) => text.replace(/\r\n/g, '\n');
-    const withEol = (text: string, eol: string) => (eol === '\r\n' ? text.replace(/\r?\n/g, '\r\n') : text);
+    const withEol = (text: string, eol: string) =>
+      eol === '\r\n' ? text.replace(/\r?\n/g, '\r\n') : text;
 
     /**
      * Decode a file's bytes as strict UTF-8, keeping a leading BOM so a save
      * writes it back. Returns { text } or { reason: 'notText' }.
      */
-    function decodeText(bytes: Uint8Array):
-      { reason?: undefined; text: string } | { reason: 'notText'; text?: undefined } {
+    function decodeText(
+      bytes: Uint8Array,
+    ): { reason?: undefined; text: string } | { reason: 'notText'; text?: undefined } {
       if (bytes.subarray(0, 8192).includes(0)) return { reason: 'notText' };
       try {
         return { text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes) };
@@ -377,7 +455,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    const formatBytes = (n: number) => (n >= 1024 * 1024 ? `${n / 1024 / 1024} MiB` : `${Math.round(n / 1024)} KiB`);
+    const formatBytes = (n: number) =>
+      n >= 1024 * 1024 ? `${n / 1024 / 1024} MiB` : `${Math.round(n / 1024)} KiB`;
 
     // ─────────────────── Monaco in a sandboxed iframe ───────────────────
 
@@ -388,9 +467,15 @@ window.__ModuleLoader__.load({
      * Parent → frame: init, getContent, setContent, markSaved, theme, focus.
      */
     function frameMain(config: { base: string }) {
-      const send = (message: unknown) => { parent.postMessage(message, '*'); };
-      const fail = (message: unknown) => { send({ type: 'error', message: String(message) }); };
-      window.addEventListener('error', (event: ErrorEvent) => { fail(event.message); });
+      const send = (message: unknown) => {
+        parent.postMessage(message, '*');
+      };
+      const fail = (message: unknown) => {
+        send({ type: 'error', message: String(message) });
+      };
+      window.addEventListener('error', (event: ErrorEvent) => {
+        fail(event.message);
+      });
       if (typeof require === 'undefined' || typeof require.config !== 'function') {
         fail('loader unavailable');
         return;
@@ -407,12 +492,19 @@ window.__ModuleLoader__.load({
       let lastDirty = false;
       const report = () => {
         const dirty = model.getAlternativeVersionId() !== savedId;
-        if (dirty !== lastDirty) { lastDirty = dirty; send({ type: 'dirty', dirty }); }
+        if (dirty !== lastDirty) {
+          lastDirty = dirty;
+          send({ type: 'dirty', dirty });
+        }
       };
 
       const handlers: Record<string, (message: any) => void> = {
         init(message: any) {
-          model = monaco.editor.createModel(message.content, undefined, monaco.Uri.file(message.fileName));
+          model = monaco.editor.createModel(
+            message.content,
+            undefined,
+            monaco.Uri.file(message.fileName),
+          );
           editor = monaco.editor.create(document.getElementById('c'), {
             model,
             theme: message.dark ? 'vs-dark' : 'vs',
@@ -424,11 +516,18 @@ window.__ModuleLoader__.load({
           });
           savedId = model.getAlternativeVersionId();
           model.onDidChangeContent(report);
-          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { send({ type: 'save' }); });
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+            send({ type: 'save' });
+          });
           send({ type: 'ready' });
         },
         getContent(message: any) {
-          send({ type: 'content', id: message.id, content: model.getValue(), token: model.getAlternativeVersionId() });
+          send({
+            type: 'content',
+            id: message.id,
+            content: model.getValue(),
+            token: model.getAlternativeVersionId(),
+          });
         },
         setContent(message: any) {
           model.setValue(message.content);
@@ -439,28 +538,39 @@ window.__ModuleLoader__.load({
           savedId = message.token;
           report();
         },
-        theme(message: any) { monaco.editor.setTheme(message.dark ? 'vs-dark' : 'vs'); },
-        focus() { editor.focus(); },
+        theme(message: any) {
+          monaco.editor.setTheme(message.dark ? 'vs-dark' : 'vs');
+        },
+        focus() {
+          editor.focus();
+        },
       };
 
       window.addEventListener('message', (event: MessageEvent) => {
         if (event.source !== parent) return;
         const message = event.data;
-        const handler = message !== null && typeof message === 'object' ? handlers[message.type] : undefined;
+        const handler =
+          message !== null && typeof message === 'object' ? handlers[message.type] : undefined;
         if (handler === undefined || (message.type !== 'init' && editor === undefined)) return;
-        try { handler(message); } catch (error) { fail(error); }
+        try {
+          handler(message);
+        } catch (error) {
+          fail(error);
+        }
       });
 
       require(['vs/editor/editor.main'], () => {
         monaco = window.monaco;
         send({ type: 'loaded' });
-      }, (error: unknown) => { fail(error); });
+      }, (error: unknown) => {
+        fail(error);
+      });
     }
 
     /** The iframe document: pinned loader with SRI, a CSP limiting everything to the CDN. */
     function frameDocument() {
       const csp = [
-        'default-src \'none\'',
+        "default-src 'none'",
         `script-src 'unsafe-inline' ${MONACO_ORIGIN} blob:`,
         `style-src 'unsafe-inline' ${MONACO_ORIGIN}`,
         `font-src ${MONACO_ORIGIN} data:`,
@@ -469,12 +579,14 @@ window.__ModuleLoader__.load({
         `connect-src ${MONACO_ORIGIN}`,
       ].join('; ');
       const main = `(${frameMain.toString()})(${JSON.stringify({ base: MONACO_BASE }).replace(/</g, '\\u003c')});`;
-      return '<!doctype html><html><head><meta charset="utf-8">'
-        + `<meta http-equiv="Content-Security-Policy" content="${csp}">`
-        + '<style>html,body,#c{margin:0;width:100%;height:100%;overflow:hidden}</style></head>'
-        + '<body><div id="c"></div>'
-        + `<script src="${MONACO_BASE}/loader.js" integrity="${MONACO_LOADER_SRI}" crossorigin="anonymous"></script>`
-        + `<script>${main}</script></body></html>`;
+      return (
+        '<!doctype html><html><head><meta charset="utf-8">' +
+        `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
+        '<style>html,body,#c{margin:0;width:100%;height:100%;overflow:hidden}</style></head>' +
+        '<body><div id="c"></div>' +
+        `<script src="${MONACO_BASE}/loader.js" integrity="${MONACO_LOADER_SRI}" crossorigin="anonymous"></script>` +
+        `<script>${main}</script></body></html>`
+      );
     }
 
     let cachedFrameDocument: string | undefined;
@@ -485,10 +597,23 @@ window.__ModuleLoader__.load({
     // markSaved(token), focus().
 
     const MonacoFrame = React.forwardRef(function MonacoFrame(
-      { fileName, initial, dark, onDirty, onSave, onFail }: {
-        fileName: string; initial: string; dark: boolean;
-        onDirty: (dirty: boolean) => void; onSave: () => void; onFail: (reason: unknown) => void;
-      }, ref: any) {
+      {
+        fileName,
+        initial,
+        dark,
+        onDirty,
+        onSave,
+        onFail,
+      }: {
+        fileName: string;
+        initial: string;
+        dark: boolean;
+        onDirty: (dirty: boolean) => void;
+        onSave: () => void;
+        onFail: (reason: unknown) => void;
+      },
+      ref: any,
+    ) {
       const frame = React.useRef(null);
       const replies = React.useRef(new Map());
       const sequence = React.useRef(0);
@@ -508,55 +633,90 @@ window.__ModuleLoader__.load({
           if (ready) console.warn('monaco frame error after ready:', reason);
           else callbacks.current.onFail(reason);
         };
-        const timer = setTimeout(() => { failed('timeout'); }, FRAME_LOAD_TIMEOUT_MS);
+        const timer = setTimeout(() => {
+          failed('timeout');
+        }, FRAME_LOAD_TIMEOUT_MS);
         const onMessage = (event: MessageEvent) => {
           if (event.source !== frame.current?.contentWindow) return;
           const message = event.data;
           if (message === null || typeof message !== 'object') return;
           switch (message.type) {
-            case 'loaded': post({ type: 'init', ...first.current }); break;
-            case 'ready': ready = true; clearTimeout(timer); break;
-            case 'dirty': callbacks.current.onDirty(message.dirty === true); break;
-            case 'save': callbacks.current.onSave(); break;
+            case 'loaded':
+              post({ type: 'init', ...first.current });
+              break;
+            case 'ready':
+              ready = true;
+              clearTimeout(timer);
+              break;
+            case 'dirty':
+              callbacks.current.onDirty(message.dirty === true);
+              break;
+            case 'save':
+              callbacks.current.onSave();
+              break;
             case 'content': {
               const pending = replies.current.get(message.id);
               replies.current.delete(message.id);
               pending?.resolve({ content: message.content, token: message.token });
               break;
             }
-            case 'error': clearTimeout(timer); failed(message.message); break;
-            default: break;
+            case 'error':
+              clearTimeout(timer);
+              failed(message.message);
+              break;
+            default:
+              break;
           }
         };
         window.addEventListener('message', onMessage);
         return () => {
           clearTimeout(timer);
           window.removeEventListener('message', onMessage);
-          for (const pending of replies.current.values()) pending.reject(new Error('editor closed'));
+          for (const pending of replies.current.values())
+            pending.reject(new Error('editor closed'));
           replies.current.clear();
         };
       }, [post]);
 
-      React.useEffect(() => { post({ type: 'theme', dark }); }, [dark, post]);
+      React.useEffect(() => {
+        post({ type: 'theme', dark });
+      }, [dark, post]);
 
-      React.useImperativeHandle(ref, () => ({
-        getContent: () => new Promise<{ content: string; token: unknown }>((resolve, reject) => {
-          sequence.current += 1;
-          const id = sequence.current;
-          const timer = setTimeout(() => {
-            replies.current.delete(id);
-            reject(new Error('editor did not answer'));
-          }, FRAME_REPLY_TIMEOUT_MS);
-          replies.current.set(id, {
-            resolve: (value: unknown) => { clearTimeout(timer); resolve(value as { content: string; token: unknown }); },
-            reject: (error: unknown) => { clearTimeout(timer); reject(error); },
-          });
-          post({ type: 'getContent', id });
+      React.useImperativeHandle(
+        ref,
+        () => ({
+          getContent: () =>
+            new Promise<{ content: string; token: unknown }>((resolve, reject) => {
+              sequence.current += 1;
+              const id = sequence.current;
+              const timer = setTimeout(() => {
+                replies.current.delete(id);
+                reject(new Error('editor did not answer'));
+              }, FRAME_REPLY_TIMEOUT_MS);
+              replies.current.set(id, {
+                resolve: (value: unknown) => {
+                  clearTimeout(timer);
+                  resolve(value as { content: string; token: unknown });
+                },
+                reject: (error: unknown) => {
+                  clearTimeout(timer);
+                  reject(error);
+                },
+              });
+              post({ type: 'getContent', id });
+            }),
+          setContent: (content: string) => {
+            post({ type: 'setContent', content });
+          },
+          markSaved: (token: unknown) => {
+            post({ type: 'markSaved', token });
+          },
+          focus: () => {
+            post({ type: 'focus' });
+          },
         }),
-        setContent: (content: string) => { post({ type: 'setContent', content }); },
-        markSaved: (token: unknown) => { post({ type: 'markSaved', token }); },
-        focus: () => { post({ type: 'focus' }); },
-      }), [post]);
+        [post],
+      );
 
       return h('iframe', {
         ref: frame,
@@ -569,35 +729,53 @@ window.__ModuleLoader__.load({
     });
 
     const TextEditor = React.forwardRef(function TextEditor(
-      { initial, eol, onDirty, onSave }: {
-        initial: string; eol: string; onDirty: (dirty: boolean) => void; onSave: () => void;
-      }, ref: any) {
+      {
+        initial,
+        eol,
+        onDirty,
+        onSave,
+      }: {
+        initial: string;
+        eol: string;
+        onDirty: (dirty: boolean) => void;
+        onSave: () => void;
+      },
+      ref: any,
+    ) {
       const area = React.useRef(null);
       const saved = React.useRef(toLf(initial));
-      React.useImperativeHandle(ref, () => ({
-        getContent: async () => {
-          const value = area.current.value;
-          return { content: withEol(value, eol), token: value };
-        },
-        setContent: (content: string) => {
-          const value = toLf(content);
-          area.current.value = value;
-          saved.current = value;
-          onDirty(false);
-        },
-        markSaved: (token: unknown) => {
-          saved.current = token;
-          onDirty(area.current.value !== saved.current);
-        },
-        focus: () => { area.current?.focus(); },
-      }), [eol, onDirty]);
+      React.useImperativeHandle(
+        ref,
+        () => ({
+          getContent: async () => {
+            const value = area.current.value;
+            return { content: withEol(value, eol), token: value };
+          },
+          setContent: (content: string) => {
+            const value = toLf(content);
+            area.current.value = value;
+            saved.current = value;
+            onDirty(false);
+          },
+          markSaved: (token: unknown) => {
+            saved.current = token;
+            onDirty(area.current.value !== saved.current);
+          },
+          focus: () => {
+            area.current?.focus();
+          },
+        }),
+        [eol, onDirty],
+      );
       return h('textarea', {
         ref: area,
         className: 'dlf-ed-text',
         defaultValue: toLf(initial),
         spellCheck: false,
         'aria-label': 'editor',
-        onChange: () => { onDirty(area.current.value !== saved.current); },
+        onChange: () => {
+          onDirty(area.current.value !== saved.current);
+        },
         onKeyDown: (event: KeyboardEvent) => {
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
             event.preventDefault();
@@ -618,20 +796,28 @@ window.__ModuleLoader__.load({
       revision: 0,
       set(id: string, dirty: boolean) {
         if (this.ids.has(id) === dirty) return;
-        if (dirty) this.ids.add(id); else this.ids.delete(id);
+        if (dirty) this.ids.add(id);
+        else this.ids.delete(id);
         this.revision += 1;
         for (const listener of this.listeners) listener();
       },
       subscribe: (listener: () => void) => {
         dirtyTabs.listeners.add(listener);
-        return () => { dirtyTabs.listeners.delete(listener); };
+        return () => {
+          dirtyTabs.listeners.delete(listener);
+        };
       },
       snapshot: () => dirtyTabs.revision,
     };
 
     // ───────────────────────────── editor tab ─────────────────────────────
 
-    const LOAD_ERROR_KEYS: Record<string, string> = { tooLarge: 'editor.tooLarge', notText: 'editor.notText', gone: 'editor.gone', failed: 'editor.loadError' };
+    const LOAD_ERROR_KEYS: Record<string, string> = {
+      tooLarge: 'editor.tooLarge',
+      notText: 'editor.notText',
+      gone: 'editor.gone',
+      failed: 'editor.loadError',
+    };
 
     interface RemoteWorkspaceFiles {
       readBytes(
@@ -639,8 +825,10 @@ window.__ModuleLoader__.load({
         path: string,
         options: { range?: { offset: number; length: number } },
         signal?: AbortSignal,
-      ): Promise<{ ok: true; value: { data: Uint8Array; eof: boolean; bytes?: number; version: string } }
-        | { ok: false; error?: { code?: string } }>;
+      ): Promise<
+        | { ok: true; value: { data: Uint8Array; eof: boolean; bytes?: number; version: string } }
+        | { ok: false; error?: { code?: string } }
+      >;
     }
 
     /** What a tab pane's `useTabInfo()` reports for this plugin's tabs. */
@@ -663,9 +851,12 @@ window.__ModuleLoader__.load({
     }
 
     type LoadError = 'tooLarge' | 'notText' | 'gone' | 'failed';
-    type LoadedFile = { reason?: undefined; text: string; eol: string; version: string }
+    type LoadedFile =
+      | { reason?: undefined; text: string; eol: string; version: string }
       | { reason: LoadError };
-    type SaveState = { state: 'idle' | 'saving' | 'saved' | 'conflict' } | { state: 'error'; key: string };
+    type SaveState =
+      | { state: 'idle' | 'saving' | 'saved' | 'conflict' }
+      | { state: 'error'; key: string };
 
     /** Read the whole file as bytes (not lines) so line endings and the trailing newline survive a save. */
     async function readFile(
@@ -677,7 +868,11 @@ window.__ModuleLoader__.load({
       let result: Awaited<ReturnType<RemoteWorkspaceFiles['readBytes']>>;
       try {
         result = await remote.workspaceFiles.readBytes(
-          sessionId, path, { range: { offset: 0, length: MAX_EDIT_BYTES + 1 } }, signal);
+          sessionId,
+          path,
+          { range: { offset: 0, length: MAX_EDIT_BYTES + 1 } },
+          signal,
+        );
       } catch {
         return { reason: 'failed' };
       }
@@ -694,7 +889,12 @@ window.__ModuleLoader__.load({
       return { text: decoded.text, eol: dominantEol(decoded.text), version };
     }
 
-    function EditorBody({ props, remote, theme, t }: {
+    function EditorBody({
+      props,
+      remote,
+      theme,
+      t,
+    }: {
       props: EditorPaneProps;
       remote: { workspaceFiles: RemoteWorkspaceFiles };
       theme: ClientTheme;
@@ -716,14 +916,27 @@ window.__ModuleLoader__.load({
       const version = React.useRef('');
 
       const key = dirtyKey(props.sessionId, tab.id);
-      const setDirty = React.useCallback((value: boolean) => {
-        setDirtyState(value);
-        dirtyTabs.set(key, value);
-        if (value) setSave((current: SaveState) => (current.state === 'saved' ? { state: 'idle' } : current));
-      }, [key]);
-      React.useEffect(() => () => { dirtyTabs.set(key, false); }, [key]);
+      const setDirty = React.useCallback(
+        (value: boolean) => {
+          setDirtyState(value);
+          dirtyTabs.set(key, value);
+          if (value)
+            setSave((current: SaveState) =>
+              current.state === 'saved' ? { state: 'idle' } : current,
+            );
+        },
+        [key],
+      );
+      React.useEffect(
+        () => () => {
+          dirtyTabs.set(key, false);
+        },
+        [key],
+      );
       React.useEffect(() => {
-        const sync = () => { setDark(theme.getTheme().active.colorScheme === 'dark'); };
+        const sync = () => {
+          setDark(theme.getTheme().active.colorScheme === 'dark');
+        };
         sync();
         return theme.subscribe(sync);
       }, [theme]);
@@ -731,7 +944,10 @@ window.__ModuleLoader__.load({
       const load = React.useCallback(async (): Promise<LoadedFile | undefined> => {
         const loaded = await readFile(remote, sessionId, path, tab.signal);
         if (tab.signal.aborted) return undefined;
-        if (loaded.reason !== undefined) { setLoadError(loaded.reason); return undefined; }
+        if (loaded.reason !== undefined) {
+          setLoadError(loaded.reason);
+          return undefined;
+        }
         version.current = loaded.version;
         return loaded;
       }, [remote, sessionId, path, tab.signal]);
@@ -739,8 +955,12 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         let alive = true;
         setLoadError(null);
-        load().then((loaded: LoadedFile | undefined) => { if (alive && loaded !== undefined) setFile(loaded); });
-        return () => { alive = false; };
+        load().then((loaded: LoadedFile | undefined) => {
+          if (alive && loaded !== undefined) setFile(loaded);
+        });
+        return () => {
+          alive = false;
+        };
       }, [load]);
 
       const reload = React.useCallback(async () => {
@@ -753,95 +973,211 @@ window.__ModuleLoader__.load({
         setDirty(false);
       }, [load, setDirty]);
 
-      const confirmDiscard = React.useCallback(() => (
-        !dirtyTabs.ids.has(key) || window.confirm(t('editor.discard', { name }))
-      ), [key, t, name]);
+      const confirmDiscard = React.useCallback(
+        () => !dirtyTabs.ids.has(key) || window.confirm(t('editor.discard', { name })),
+        [key, t, name],
+      );
 
-      React.useEffect(() => tab.actions.bindCommands({
-        refresh: () => { if (confirmDiscard()) reload(); },
-      }), [tab.actions, confirmDiscard, reload]);
+      React.useEffect(
+        () =>
+          tab.actions.bindCommands({
+            refresh: () => {
+              if (confirmDiscard()) reload();
+            },
+          }),
+        [tab.actions, confirmDiscard, reload],
+      );
 
-      const doSave = React.useCallback(async (force: boolean) => {
-        if (save.state === 'saving' || editor.current === null) return;
-        setSave({ state: 'saving' });
-        try {
-          const { content, token } = await editor.current.getContent();
-          const response = await fetch(new URL(SAVE_ROUTE, document.baseURI).href, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(force
-              ? { sessionId, path, content, force: true }
-              : { sessionId, path, content, expectedVersion: version.current }),
-          });
-          if (response.ok) {
-            version.current = (await response.json()).version;
-            editor.current.markSaved(token);
-            setSave({ state: 'saved' });
-            // Clicking the Save button took keyboard focus; hand it back to the text.
-            editor.current.focus();
-            return;
+      const doSave = React.useCallback(
+        async (force: boolean) => {
+          if (save.state === 'saving' || editor.current === null) return;
+          setSave({ state: 'saving' });
+          try {
+            const { content, token } = await editor.current.getContent();
+            const response = await fetch(new URL(SAVE_ROUTE, document.baseURI).href, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(
+                force
+                  ? { sessionId, path, content, force: true }
+                  : { sessionId, path, content, expectedVersion: version.current },
+              ),
+            });
+            if (response.ok) {
+              version.current = (await response.json()).version;
+              editor.current.markSaved(token);
+              setSave({ state: 'saved' });
+              // Clicking the Save button took keyboard focus; hand it back to the text.
+              editor.current.focus();
+              return;
+            }
+            // Only our route answers with JSON { error }; a 404 without it comes from
+            // the server's router (route not registered), not from a missing file.
+            const answered = (response.headers.get('content-type') ?? '').includes(
+              'application/json',
+            );
+            if (response.status === 409) setSave({ state: 'conflict' });
+            else if (response.status === 403) setSave({ state: 'error', key: 'editor.denied' });
+            else if (response.status === 404 || response.status === 405) {
+              setSave({
+                state: 'error',
+                key: answered && response.status === 404 ? 'editor.gone' : 'editor.noRoute',
+              });
+            } else if (response.status === 413) setSave({ state: 'error', key: 'editor.tooLarge' });
+            else setSave({ state: 'error', key: 'editor.saveError' });
+          } catch {
+            setSave({ state: 'error', key: 'editor.saveError' });
           }
-          // Only our route answers with JSON { error }; a 404 without it comes from
-          // the server's router (route not registered), not from a missing file.
-          const answered = (response.headers.get('content-type') ?? '').includes('application/json');
-          if (response.status === 409) setSave({ state: 'conflict' });
-          else if (response.status === 403) setSave({ state: 'error', key: 'editor.denied' });
-          else if (response.status === 404 || response.status === 405) {
-            setSave({ state: 'error', key: answered && response.status === 404 ? 'editor.gone' : 'editor.noRoute' });
-          }
-          else if (response.status === 413) setSave({ state: 'error', key: 'editor.tooLarge' });
-          else setSave({ state: 'error', key: 'editor.saveError' });
-        } catch {
-          setSave({ state: 'error', key: 'editor.saveError' });
-        }
-      }, [save.state, sessionId, path]);
+        },
+        [save.state, sessionId, path],
+      );
 
-      const onSave = React.useCallback(() => { doSave(false); }, [doSave]);
+      const onSave = React.useCallback(() => {
+        doSave(false);
+      }, [doSave]);
       const onFrameFail = React.useCallback((reason: unknown) => {
         console.warn('monaco unavailable, using plain text:', reason);
         setEngine((current: 'monaco' | 'text') => (current === 'monaco' ? 'text' : current));
       }, []);
 
       if (loadError !== null) {
-        return h('div', { className: 'dlf-ed', 'data-dlf-editor': '' },
-          h('div', { className: 'dlf-ed-msg' },
+        return h(
+          'div',
+          { className: 'dlf-ed', 'data-dlf-editor': '' },
+          h(
+            'div',
+            { className: 'dlf-ed-msg' },
             h('span', null, t(LOAD_ERROR_KEYS[loadError], { limit: formatBytes(MAX_EDIT_BYTES) })),
-            (loadError === 'failed' || loadError === 'gone')
-              && h('button', { type: 'button', className: 'dlf-ed-btn', onClick: () => { reload(); } }, t('editor.retry'))));
+            (loadError === 'failed' || loadError === 'gone') &&
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dlf-ed-btn',
+                  onClick: () => {
+                    reload();
+                  },
+                },
+                t('editor.retry'),
+              ),
+          ),
+        );
       }
       if (file === null) {
-        return h('div', { className: 'dlf-ed', 'data-dlf-editor': '' },
-          h('div', { className: 'dlf-ed-msg' }, t('editor.loading')));
+        return h(
+          'div',
+          { className: 'dlf-ed', 'data-dlf-editor': '' },
+          h('div', { className: 'dlf-ed-msg' }, t('editor.loading')),
+        );
       }
 
-      const status: { text: string; tone?: string } | undefined = save.state === 'saving' ? { text: t('editor.saving') }
-        : save.state === 'error' ? { text: t(save.key, { limit: formatBytes(MAX_EDIT_BYTES) }), tone: 'error' }
-          : save.state === 'saved' && !dirty ? { text: t('editor.saved'), tone: 'ok' }
-            : dirty ? { text: t('editor.unsaved') } : undefined;
+      const status: { text: string; tone?: string } | undefined =
+        save.state === 'saving'
+          ? { text: t('editor.saving') }
+          : save.state === 'error'
+            ? { text: t(save.key, { limit: formatBytes(MAX_EDIT_BYTES) }), tone: 'error' }
+            : save.state === 'saved' && !dirty
+              ? { text: t('editor.saved'), tone: 'ok' }
+              : dirty
+                ? { text: t('editor.unsaved') }
+                : undefined;
 
-      return h('div', { className: 'dlf-ed', 'data-dlf-editor': '' },
-        h('div', { className: 'dlf-ed-bar' },
-          h('span', { className: 'dlf-ed-name', title: path }, name, dirty && h('span', { className: 'dlf-ed-dot' }, ' ●')),
+      return h(
+        'div',
+        { className: 'dlf-ed', 'data-dlf-editor': '' },
+        h(
+          'div',
+          { className: 'dlf-ed-bar' },
+          h(
+            'span',
+            { className: 'dlf-ed-name', title: path },
+            name,
+            dirty && h('span', { className: 'dlf-ed-dot' }, ' ●'),
+          ),
           h('span', { className: 'dlf-ed-spacer' }),
-          status && h('span', { className: 'dlf-ed-status', 'data-tone': status.tone, role: status.tone === 'error' ? 'alert' : undefined }, status.text),
-          h('button', {
-            type: 'button',
-            className: 'dlf-ed-btn',
-            disabled: !dirty || save.state === 'saving',
-            onClick: onSave,
-          }, t('editor.save'))),
-        save.state === 'conflict' && h('div', { className: 'dlf-ed-banner', role: 'alert' },
-          h('span', null, t('editor.conflict')),
-          h('button', { type: 'button', className: 'dlf-ed-btn', onClick: () => { reload(); } }, t('editor.reload')),
-          h('button', { type: 'button', className: 'dlf-ed-btn', onClick: () => { doSave(true); } }, t('editor.overwrite')),
-          h('button', { type: 'button', className: 'dlf-ed-btn', onClick: () => { setSave({ state: 'idle' }); } }, t('editor.keep'))),
+          status &&
+            h(
+              'span',
+              {
+                className: 'dlf-ed-status',
+                'data-tone': status.tone,
+                role: status.tone === 'error' ? 'alert' : undefined,
+              },
+              status.text,
+            ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dlf-ed-btn',
+              disabled: !dirty || save.state === 'saving',
+              onClick: onSave,
+            },
+            t('editor.save'),
+          ),
+        ),
+        save.state === 'conflict' &&
+          h(
+            'div',
+            { className: 'dlf-ed-banner', role: 'alert' },
+            h('span', null, t('editor.conflict')),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dlf-ed-btn',
+                onClick: () => {
+                  reload();
+                },
+              },
+              t('editor.reload'),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dlf-ed-btn',
+                onClick: () => {
+                  doSave(true);
+                },
+              },
+              t('editor.overwrite'),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dlf-ed-btn',
+                onClick: () => {
+                  setSave({ state: 'idle' });
+                },
+              },
+              t('editor.keep'),
+            ),
+          ),
         engine === 'text' && h('div', { className: 'dlf-ed-note' }, t('editor.plain')),
-        h('div', { className: 'dlf-ed-body' },
+        h(
+          'div',
+          { className: 'dlf-ed-body' },
           engine === 'monaco'
             ? h(MonacoFrame, {
-              ref: editor, fileName: name, initial: file.text, dark, onDirty: setDirty, onSave, onFail: onFrameFail,
-            })
-            : h(TextEditor, { ref: editor, initial: file.text, eol: file.eol, onDirty: setDirty, onSave })));
+                ref: editor,
+                fileName: name,
+                initial: file.text,
+                dark,
+                onDirty: setDirty,
+                onSave,
+                onFail: onFrameFail,
+              })
+            : h(TextEditor, {
+                ref: editor,
+                initial: file.text,
+                eol: file.eol,
+                onDirty: setDirty,
+                onSave,
+              }),
+        ),
+      );
     }
 
     // ───────────────────────────── plugin body ─────────────────────────────
@@ -851,9 +1187,17 @@ window.__ModuleLoader__.load({
       effect(callback: () => unknown, label?: string): unknown;
       slots: {
         inject(name: string, factory: () => unknown): unknown;
-        register(registration: {
-          name: string; id?: string; key?: string; order?: number; priority?: number; locale?: string;
-        }, component: any): unknown;
+        register(
+          registration: {
+            name: string;
+            id?: string;
+            key?: string;
+            order?: number;
+            priority?: number;
+            locale?: string;
+          },
+          component: any,
+        ): unknown;
       };
       locale: {
         register(namespace: string, dictionaries: Record<string, Record<string, string>>): unknown;
@@ -876,7 +1220,15 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'locale', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'theme'],
+      inject: [
+        'slots',
+        'locale',
+        'sidebarRight',
+        'sidebarRightTabs',
+        'remote',
+        'remote.workspaceFiles',
+        'theme',
+      ],
       apply(ctx: ClientCtx) {
         ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'always-on: dictionaries');
         ctx.effect(() => {
@@ -884,7 +1236,9 @@ window.__ModuleLoader__.load({
           style.dataset.plugin = 'dsh-always-on';
           style.textContent = CSS;
           document.head.appendChild(style);
-          return () => { style.remove(); };
+          return () => {
+            style.remove();
+          };
         }, 'always-on: styles');
         const t = ctx.locale.bind(NS);
 
@@ -897,16 +1251,24 @@ window.__ModuleLoader__.load({
           const url = routeUrl(props.actionUrl);
           return url === undefined ? null : h(DownloadButton, { url, t });
         };
-        const PathActions = (props: { sessionId?: unknown; absolutePath?: unknown }) => (typeof props.absolutePath === 'string'
-          ? h(React.Fragment, null,
-            h(EditButton, {
-              sessionId: props.sessionId, absolutePath: props.absolutePath, sidebarRight: ctx.sidebarRight, t,
-            }),
-            h(DownloadButton, { url: pathUrl(props.absolutePath), t }))
-          : null);
-        const PathDownloadProminent = (props: { absolutePath?: unknown }) => (
+        const PathActions = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
           typeof props.absolutePath === 'string'
-            ? h(DownloadButton, { url: pathUrl(props.absolutePath), large: true, t }) : null);
+            ? h(
+                React.Fragment,
+                null,
+                h(EditButton, {
+                  sessionId: props.sessionId,
+                  absolutePath: props.absolutePath,
+                  sidebarRight: ctx.sidebarRight,
+                  t,
+                }),
+                h(DownloadButton, { url: pathUrl(props.absolutePath), t }),
+              )
+            : null;
+        const PathDownloadProminent = (props: { absolutePath?: unknown }) =>
+          typeof props.absolutePath === 'string'
+            ? h(DownloadButton, { url: pathUrl(props.absolutePath), large: true, t })
+            : null;
 
         const slots: Record<string, (props: any) => any> = {
           'deliverables.file.actions': FileRouteDownload,
@@ -915,69 +1277,144 @@ window.__ModuleLoader__.load({
           'sidebar.right.tab.document.unpreviewable': PathDownloadProminent,
         };
         for (const [name, component] of Object.entries(slots)) {
-          ctx.slots.inject(name, () => ctx.slots.register({
-            name, id: STOCK_ID, priority: -1, locale: NS,
-          }, component));
+          ctx.slots.inject(name, () =>
+            ctx.slots.register(
+              {
+                name,
+                id: STOCK_ID,
+                priority: -1,
+                locale: NS,
+              },
+              component,
+            ),
+          );
         }
-        ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
-          name: 'conversation.session.header.utilities', id: STOCK_ID, order: -10,
-          priority: -1, locale: NS,
-        }, SessionShowFiles));
-        ctx.slots.inject('sidebar.right.tab.files.actions', () => ctx.slots.register({
-          name: 'sidebar.right.tab.files.actions', id: STOCK_ID, priority: -1, locale: NS,
-        }, HiddenInFilesTab));
+        ctx.slots.inject('conversation.session.header.utilities', () =>
+          ctx.slots.register(
+            {
+              name: 'conversation.session.header.utilities',
+              id: STOCK_ID,
+              order: -10,
+              priority: -1,
+              locale: NS,
+            },
+            SessionShowFiles,
+          ),
+        );
+        ctx.slots.inject('sidebar.right.tab.files.actions', () =>
+          ctx.slots.register(
+            {
+              name: 'sidebar.right.tab.files.actions',
+              id: STOCK_ID,
+              priority: -1,
+              locale: NS,
+            },
+            HiddenInFilesTab,
+          ),
+        );
 
         // ── sidebar editor tab ──
-        ctx.effect(() => ctx.sidebarRightTabs.register({
-          id: EDITOR_ID,
-          kind: EDITOR_KIND,
-          // Opened only on request (the Edit button); never claims files by itself.
-          priority: 'fallback',
-          // An editor must keep its unsaved text while another tab is in front.
-          keepMounted: true,
-          canOpen: (address: string) => parseFileAddress(address) !== undefined,
-          title: (address: string) => baseName(parseFileAddress(address)?.path ?? address),
-        }), 'always-on: editor tab type');
+        ctx.effect(
+          () =>
+            ctx.sidebarRightTabs.register({
+              id: EDITOR_ID,
+              kind: EDITOR_KIND,
+              // Opened only on request (the Edit button); never claims files by itself.
+              priority: 'fallback',
+              // An editor must keep its unsaved text while another tab is in front.
+              keepMounted: true,
+              canOpen: (address: string) => parseFileAddress(address) !== undefined,
+              title: (address: string) => baseName(parseFileAddress(address)?.path ?? address),
+            }),
+          'always-on: editor tab type',
+        );
 
         const theme: ClientTheme = {
           getTheme: () => ctx.theme.getTheme(),
           subscribe: (listener: () => void) => ctx.on('theme/change', listener),
         };
-        const Body = (props: EditorPaneProps) => h(EditorBody, { props, remote: ctx.remote, theme, t });
-        ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
-          name: 'sidebar.right.pane.tab', key: EDITOR_ID, locale: NS,
-        }, Body)), 'always-on: editor tab body');
+        const Body = (props: EditorPaneProps) =>
+          h(EditorBody, { props, remote: ctx.remote, theme, t });
+        ctx.effect(
+          () =>
+            ctx.slots.inject('sidebar.right.pane.tab', () =>
+              ctx.slots.register(
+                {
+                  name: 'sidebar.right.pane.tab',
+                  key: EDITOR_ID,
+                  locale: NS,
+                },
+                Body,
+              ),
+            ),
+          'always-on: editor tab body',
+        );
 
         // Same icon as the stock preview tab: FileTypeIcon + classifyFileType from the
         // shared primitives. If a future Harness stops exposing them, the tab simply
         // shows no icon rather than failing.
         let primitives: any;
-        try { primitives = require('@deepseek-ai/dsh-client-ui-primitives'); } catch { /* no icon */ }
+        try {
+          primitives = require('@deepseek-ai/dsh-client-ui-primitives');
+        } catch {
+          /* no icon */
+        }
         const FileTypeIcon = primitives?.FileTypeIcon;
         const classifyFileType = primitives?.classifyFileType;
-        const Title = ({ useTabInfo, sessionId }: {
-          useTabInfo: () => { tab: ClientTab }; sessionId: string;
+        const Title = ({
+          useTabInfo,
+          sessionId,
+        }: {
+          useTabInfo: () => { tab: ClientTab };
+          sessionId: string;
         }) => {
           const { tab } = useTabInfo();
           React.useSyncExternalStore(dirtyTabs.subscribe, dirtyTabs.snapshot);
-          const icon = FileTypeIcon && classifyFileType
-            ? h(FileTypeIcon, { kind: classifyFileType(tab.title), size: 16, className: 'dlf-ed-titleIcon' })
-            : null;
-          return h(React.Fragment, null, icon, tab.title, dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)) ? ' ●' : '');
+          const icon =
+            FileTypeIcon && classifyFileType
+              ? h(FileTypeIcon, {
+                  kind: classifyFileType(tab.title),
+                  size: 16,
+                  className: 'dlf-ed-titleIcon',
+                })
+              : null;
+          return h(
+            React.Fragment,
+            null,
+            icon,
+            tab.title,
+            dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)) ? ' ●' : '',
+          );
         };
-        ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
-          name: 'sidebar.right.pane.tab.title', key: EDITOR_ID,
-        }, Title)), 'always-on: editor tab title');
+        ctx.effect(
+          () =>
+            ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+              ctx.slots.register(
+                {
+                  name: 'sidebar.right.pane.tab.title',
+                  key: EDITOR_ID,
+                },
+                Title,
+              ),
+            ),
+          'always-on: editor tab title',
+        );
 
         // Closing a tab with unsaved text asks first; throwing keeps the tab open.
-        ctx.effect(() => ctx.sidebarRight.registerCloseHandler(EDITOR_KIND, (sessionId, tab) => {
-          const key = dirtyKey(sessionId, tab.id);
-          if (dirtyTabs.ids.has(key)
-            && !window.confirm(t('editor.discard', { name: tab.title.replace(/ ●$/, '') }))) {
-            throw new Error('close cancelled: unsaved changes');
-          }
-          dirtyTabs.set(key, false);
-        }), 'always-on: editor close guard');
+        ctx.effect(
+          () =>
+            ctx.sidebarRight.registerCloseHandler(EDITOR_KIND, (sessionId, tab) => {
+              const key = dirtyKey(sessionId, tab.id);
+              if (
+                dirtyTabs.ids.has(key) &&
+                !window.confirm(t('editor.discard', { name: tab.title.replace(/ ●$/, '') }))
+              ) {
+                throw new Error('close cancelled: unsaved changes');
+              }
+              dirtyTabs.set(key, false);
+            }),
+          'always-on: editor close guard',
+        );
 
         ctx.effect(() => {
           const guard = (event: BeforeUnloadEvent) => {
@@ -986,7 +1423,9 @@ window.__ModuleLoader__.load({
             event.returnValue = '';
           };
           window.addEventListener('beforeunload', guard);
-          return () => { window.removeEventListener('beforeunload', guard); };
+          return () => {
+            window.removeEventListener('beforeunload', guard);
+          };
         }, 'always-on: unload guard');
       },
     };

@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
+import type { SandboxPolicy, SaveContext, SaveRegisterContext, WriteIntent } from './context.ts';
 import { failureStatus } from './download-route.ts';
-import type { SaveContext, SaveRegisterContext, SandboxPolicy, WriteIntent } from './context.ts';
 
 export const SAVE_PATH = '/api/save.file';
 /** Largest file the editor opens or saves; also bounds the request body. */
@@ -48,8 +48,10 @@ async function parse(request: Request): Promise<SaveInput | Response> {
   }
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return fail(400);
   const { sessionId, path, content, expectedVersion, force } = body as Record<string, unknown>;
-  if (typeof sessionId !== 'string' || sessionId.length === 0) return fail(400, 'sessionId required');
-  if (typeof path !== 'string' || path.length === 0 || path.includes('\0')) return fail(400, 'path required');
+  if (typeof sessionId !== 'string' || sessionId.length === 0)
+    return fail(400, 'sessionId required');
+  if (typeof path !== 'string' || path.length === 0 || path.includes('\0'))
+    return fail(400, 'path required');
   if (typeof content !== 'string') return fail(400, 'content must be a string');
   if (Buffer.byteLength(content, 'utf8') > MAX_SAVE_BYTES) return fail(413);
   if (expectedVersion !== undefined && typeof expectedVersion !== 'string') return fail(400);
@@ -108,7 +110,8 @@ export async function handleSave(ctx: SaveContext, request: Request): Promise<Re
     if (info === undefined) return fail(404);
     if (info.type !== 'file') return fail(403, 'not a regular file');
 
-    const intent: WriteIntent | undefined = input.force ? undefined
+    const intent: WriteIntent | undefined = input.force
+      ? undefined
       : { kind: 'replaceIfVersion', version: input.expectedVersion };
     const outcome = await fs.writeText(target, input.content, intent, signal, policy);
     return json(200, { version: outcome.version, operation: outcome.operation });
@@ -128,9 +131,13 @@ export function registerSaveRoute(ctx: SaveRegisterContext): () => Promise<void>
     requestBody: 'buffered',
     fetch: (request) => {
       const task = handleSave(
-        ctx, new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) }));
+        ctx,
+        new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) }),
+      );
       pending.add(task);
-      const done = () => { pending.delete(task); };
+      const done = () => {
+        pending.delete(task);
+      };
       task.then(done, done);
       return task;
     },
