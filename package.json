@@ -42,11 +42,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json",
     "check": "tsc -p tsconfig.json && tsc -p tsconfig.client.json --noEmit",
+    "format": "biome check --write .",
+    "lint": "biome check .",
     "prepare": "npm run build",
     "test": "node --test \"test/*.test.ts\"",
     "test:e2e": "npm run build && node e2e/browser.e2e.mts"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
     "@types/node": "^24.19.1",
     "typescript": "^7.0.2"
   },

@@ -27,6 +27,7 @@ jobs:
             exit 1
           fi
       - run: npm ci
+      - run: npm run lint
       - run: npm run check
       - run: npm test
       - run: npm publish --provenance --access public
