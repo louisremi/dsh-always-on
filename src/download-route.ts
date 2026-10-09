@@ -1,4 +1,5 @@
 import { isAbsolute, basename } from 'node:path';
+import type { DownloadContext, DownloadRegisterContext } from './context.ts';
 
 export const DOWNLOAD_PATH = '/api/download.file';
 /** Bytes read from the filesystem per stream pull. */
@@ -6,21 +7,21 @@ export const CHUNK_BYTES = 1024 * 1024;
 
 const NUMERIC = /^\d+$/;
 
-export function text(status, body, method) {
+export function text(status: number, body: string, method: string): Response {
   return new Response(method === 'HEAD' ? null : body, {
     status,
     headers: { 'cache-control': 'private, no-store' },
   });
 }
 
-function coordinate(value) {
+function coordinate(value: string | null): number | undefined {
   return value !== null && NUMERIC.test(value) && Number.isSafeInteger(Number(value))
     ? Number(value)
     : undefined;
 }
 
 /** Content-Disposition value with an ASCII fallback and an RFC 5987 UTF-8 name. */
-export function contentDisposition(name) {
+export function contentDisposition(name: string): string {
   const clean = [...name].filter((c) => c.charCodeAt(0) >= 32 && c.charCodeAt(0) !== 127)
     .join('').replace(/[\\/]/g, '_') || 'download';
   const ascii = clean.replace(/[^\x20-\x7e]/g, '_').replace(/["%;]/g, '_');
@@ -29,18 +30,27 @@ export function contentDisposition(name) {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
-function isPresentedFile(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    && typeof value.path === 'string' && value.path.trim().length > 0;
+function isPresentedFile(value: unknown): value is { path: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const path = (value as { path?: unknown }).path;
+  return typeof path === 'string' && path.trim().length > 0;
 }
 
-function remoteCode(error) {
+interface RemoteErrorShape {
+  remote?: { code?: unknown } | undefined;
+  code?: unknown;
+  data?: { code?: unknown } | undefined;
+}
+
+function remoteCode(error: unknown): unknown {
   return typeof error === 'object' && error !== null
-    ? (error.remote?.code ?? error.code ?? error.data?.code)
+    ? ((error as RemoteErrorShape).remote?.code
+      ?? (error as RemoteErrorShape).code
+      ?? (error as RemoteErrorShape).data?.code)
     : undefined;
 }
 
-export function failureStatus(error) {
+export function failureStatus(error: unknown): number {
   const code = String(remoteCode(error) ?? '');
   if (code === 'session/not-found' || code === 'workspace-file/not-found'
     || code === 'SESSION_QUERY_SESSION_NOT_FOUND' || code === 'SESSION_QUERY_EVENT_NOT_FOUND'
@@ -55,7 +65,11 @@ export function failureStatus(error) {
 }
 
 /** Resolve the Host path named by the request's query, or a Response to answer with. */
-async function locate(ctx, request, query) {
+async function locate(
+  ctx: DownloadContext,
+  request: Request,
+  query: URLSearchParams,
+): Promise<string | Response> {
   const source = query.get('source');
   if (source === null) {
     const path = query.get('path');
@@ -73,8 +87,8 @@ async function locate(ctx, request, query) {
     const read = await ctx.sessionQuery.readEvent(
       { sessionId: id, seq, before: 0, after: 0 }, request.signal);
     const { target, session } = read;
-    const file = target.type === 'deliverables/presented' && Array.isArray(target.data?.files)
-      ? target.data.files[index] : undefined;
+    const files = target.type === 'deliverables/presented' ? target.data?.files : undefined;
+    const file = Array.isArray(files) ? files[index] : undefined;
     if (!isPresentedFile(file)) return text(404, 'presented file not found', request.method);
     const { absolutePath } = await ctx.workspaceFiles.stat(
       { sessionId: id, workspaceRoot: session.cwd ?? ctx.sandboxPolicy.workspaceRoot },
@@ -98,7 +112,7 @@ async function locate(ctx, request, query) {
  * `source=present|changes&sessionId&seq&index` serves a file by the same
  * Session event coordinates the stock file cards use.
  */
-export async function handleDownload(ctx, request) {
+export async function handleDownload(ctx: DownloadContext, request: Request): Promise<Response> {
   const method = request.method;
   const query = new URL(request.url).searchParams;
   try {
@@ -113,7 +127,7 @@ export async function handleDownload(ctx, request) {
     if (info === undefined) return text(404, 'not found', method);
     if (info.type !== 'file') return text(403, 'not a regular file', method);
     const size = typeof info.size === 'number' ? info.size : undefined;
-    const headers = {
+    const headers: Record<string, string> = {
       'cache-control': 'private, no-store',
       'content-type': 'application/octet-stream',
       'x-content-type-options': 'nosniff',
@@ -149,9 +163,9 @@ export async function handleDownload(ctx, request) {
 }
 
 /** Register the route on the authenticated connection; returns its disposer. */
-export function registerDownloadRoute(ctx) {
+export function registerDownloadRoute(ctx: DownloadRegisterContext): () => Promise<void> {
   const lifetime = new AbortController();
-  const pending = new Set();
+  const pending = new Set<Promise<unknown>>();
   const unregister = ctx.connection.fetch.register({
     path: DOWNLOAD_PATH,
     methods: ['GET', 'HEAD'],

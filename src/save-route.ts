@@ -1,11 +1,12 @@
 import { isAbsolute } from 'node:path';
-import { failureStatus } from './download-route.js';
+import { failureStatus } from './download-route.ts';
+import type { SaveContext, SaveRegisterContext, SandboxPolicy, WriteIntent } from './context.ts';
 
 export const SAVE_PATH = '/api/save.file';
 /** Largest file the editor opens or saves; also bounds the request body. */
 export const MAX_SAVE_BYTES = 1024 * 1024;
 
-const FAIL_MESSAGE = {
+const FAIL_MESSAGE: Record<number, string> = {
   400: 'invalid request',
   403: 'write not permitted',
   404: 'file not found',
@@ -14,7 +15,15 @@ const FAIL_MESSAGE = {
   415: 'not a text file',
 };
 
-function json(status, body) {
+interface SaveInput {
+  sessionId: string;
+  path: string;
+  content: string;
+  expectedVersion: string | undefined;
+  force: boolean;
+}
+
+function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -25,20 +34,20 @@ function json(status, body) {
   });
 }
 
-function fail(status, message) {
+function fail(status: number, message?: string): Response {
   return json(status, { error: message ?? FAIL_MESSAGE[status] ?? 'save failed' });
 }
 
 /** Parse and validate the JSON body; returns the fields or a Response to answer with. */
-async function parse(request) {
-  let body;
+async function parse(request: Request): Promise<SaveInput | Response> {
+  let body: unknown;
   try {
     body = await request.json();
   } catch {
     return fail(400, 'body must be JSON');
   }
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return fail(400);
-  const { sessionId, path, content, expectedVersion, force } = body;
+  const { sessionId, path, content, expectedVersion, force } = body as Record<string, unknown>;
   if (typeof sessionId !== 'string' || sessionId.length === 0) return fail(400, 'sessionId required');
   if (typeof path !== 'string' || path.length === 0 || path.includes('\0')) return fail(400, 'path required');
   if (typeof content !== 'string') return fail(400, 'content must be a string');
@@ -56,7 +65,11 @@ async function parse(request) {
  * workspace boundary and mode when it is live, else its persisted workspace
  * root under the deployment default mode. Never widened beyond that.
  */
-async function policyFor(ctx, sessionId, signal) {
+async function policyFor(
+  ctx: SaveContext,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<SandboxPolicy | undefined> {
   const live = ctx.sessions?.get(sessionId);
   if (live !== undefined) return ctx.sandboxPolicy.resolve({ session: live });
   const stored = await ctx.get('sessionPersistence')?.stat(sessionId);
@@ -75,7 +88,7 @@ async function policyFor(ctx, sessionId, signal) {
  * The write runs through `ctx.fs.writeText` with the Session's sandbox policy,
  * so read-only mode and workspace boundaries are enforced by the Harness.
  */
-export async function handleSave(ctx, request) {
+export async function handleSave(ctx: SaveContext, request: Request): Promise<Response> {
   if (request.method !== 'POST') return fail(405, 'POST only');
   try {
     const input = await parse(request);
@@ -95,7 +108,7 @@ export async function handleSave(ctx, request) {
     if (info === undefined) return fail(404);
     if (info.type !== 'file') return fail(403, 'not a regular file');
 
-    const intent = input.force ? undefined
+    const intent: WriteIntent | undefined = input.force ? undefined
       : { kind: 'replaceIfVersion', version: input.expectedVersion };
     const outcome = await fs.writeText(target, input.content, intent, signal, policy);
     return json(200, { version: outcome.version, operation: outcome.operation });
@@ -106,9 +119,9 @@ export async function handleSave(ctx, request) {
 }
 
 /** Register the route on the authenticated connection; returns its disposer. */
-export function registerSaveRoute(ctx) {
+export function registerSaveRoute(ctx: SaveRegisterContext): () => Promise<void> {
   const lifetime = new AbortController();
-  const pending = new Set();
+  const pending = new Set<Promise<unknown>>();
   const unregister = ctx.connection.fetch.register({
     path: SAVE_PATH,
     methods: ['POST'],

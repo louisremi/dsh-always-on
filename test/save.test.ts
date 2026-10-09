@@ -3,52 +3,70 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, statSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handleSave, registerSaveRoute, MAX_SAVE_BYTES } from '../src/save-route.js';
+import { handleSave, registerSaveRoute, MAX_SAVE_BYTES } from '../src/save-route.ts';
+import type {
+  FetchRoute,
+  FsTarget,
+  LiveSession,
+  SaveContext,
+  SaveRegisterContext,
+  SandboxPolicy,
+  WriteIntent,
+} from '../src/context.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-save-'));
 mkdirSync(join(dir, 'sub'));
 
-const versionOf = (path) => {
+const versionOf = (path: string) => {
   const s = statSync(path, { bigint: true });
   return `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}`;
 };
 const denied = () => Object.assign(new Error('denied'), { code: 'FS_SANDBOX_DENIED' });
-const coded = (code) => Object.assign(new Error(code), { code });
+const coded = (code: string) => Object.assign(new Error(code), { code });
+
+/** What the fake fs.writeText records per call. */
+interface Write {
+  target: FsTarget;
+  content: string;
+  intent: WriteIntent | undefined;
+  policy: SandboxPolicy;
+}
+
+type FakeSaveCtx = SaveContext & { writes: Write[] };
 
 /** A fake Host context backed by the real filesystem, mirroring fs.writeText's version guard. */
-function fakeCtx({ mode = 'workspace-write', live = true, extra = {} } = {}) {
-  const writes = [];
-  const fs = {
-    processPathFromHostPath: (p) => (p.startsWith('/etc/') ? undefined : p),
-    async resolve(p) { return { displayPath: p }; },
-    async stat(t) {
-      try {
-        const s = statSync(t.displayPath);
-        return { type: s.isFile() ? 'file' : 'directory', size: s.size, version: versionOf(t.displayPath) };
-      } catch { return undefined; }
-    },
-    async writeText(target, content, intent, _signal, policy) {
-      writes.push({ target, content, intent, policy });
-      if (policy.mode === 'read-only') throw denied();
-      if (!target.displayPath.startsWith(policy.workspaceRoot)) throw denied();
-      if (intent?.kind === 'replaceIfVersion' && intent.version !== versionOf(target.displayPath)) {
-        throw coded('FS_STALE_VERSION');
-      }
-      writeFileSync(target.displayPath, content);
-      return { operation: 'update', version: versionOf(target.displayPath) };
-    },
-  };
-  const session = { id: 'sess' };
+function fakeCtx({ mode = 'workspace-write', live = true }: { mode?: string; live?: boolean } = {}): FakeSaveCtx {
+  const writes: Write[] = [];
+  const session: LiveSession = { id: 'sess' };
   return {
     writes,
-    fs,
+    fs: {
+      processPathFromHostPath: (p) => (p.startsWith('/etc/') ? undefined : p),
+      async resolve(p) { return { displayPath: p }; },
+      async stat(t) {
+        try {
+          const s = statSync(t.displayPath!);
+          return { type: s.isFile() ? 'file' : 'directory', size: s.size, version: versionOf(t.displayPath!) };
+        } catch { return undefined; }
+      },
+      async writeText(target, content, intent, _signal, policy) {
+        writes.push({ target, content, intent, policy });
+        if (policy.mode === 'read-only') throw denied();
+        if (!target.displayPath!.startsWith(policy.workspaceRoot)) throw denied();
+        if (intent?.kind === 'replaceIfVersion' && intent.version !== versionOf(target.displayPath!)) {
+          throw coded('FS_STALE_VERSION');
+        }
+        writeFileSync(target.displayPath!, content);
+        return { operation: 'update', version: versionOf(target.displayPath!) };
+      },
+    },
     sessions: { get: (id) => (live && id === 'sess' ? session : undefined) },
     get: (name) => (name === 'sessionPersistence'
-      ? { stat: async (id) => (id === 'cold' ? { header: { cwd: dir } } : undefined) } : undefined),
+      ? { stat: async (id: string) => (id === 'cold' ? { header: { cwd: dir } } : undefined) } : undefined),
     sandboxPolicy: {
       defaultMode: 'workspace-write',
       workspaceRoot: dir,
-      resolve: ({ session: s }) => ({ mode, workspaceRoot: dir, sessionId: s.id }),
+      resolve: ({ session: s }: { session: LiveSession }) => ({ mode, workspaceRoot: dir, sessionId: s.id }),
     },
     workspaceFiles: {
       async stat(scope, path) {
@@ -56,14 +74,13 @@ function fakeCtx({ mode = 'workspace-write', live = true, extra = {} } = {}) {
         return { absolutePath: path.startsWith('/') ? path : join(scope.workspaceRoot, path) };
       },
     },
-    ...extra,
   };
 }
 
-const post = (ctx, body, init = {}) => handleSave(ctx, new Request('http://x/api/save.file', {
+const post = (ctx: SaveContext, body: unknown, init: RequestInit = {}) => handleSave(ctx, new Request('http://x/api/save.file', {
   method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body), ...init,
 }));
-const fresh = (name, text = 'one\n') => { const p = join(dir, name); writeFileSync(p, text); return p; };
+const fresh = (name: string, text = 'one\n') => { const p = join(dir, name); writeFileSync(p, text); return p; };
 
 test('saves with the version it read and returns the new version', async () => {
   const file = fresh('a.txt');
@@ -91,7 +108,7 @@ test('stale version is a 409 and leaves the file untouched; force overwrites', a
   const forced = await post(ctx, { sessionId: 'sess', path: 'b.txt', content: 'mine', force: true });
   assert.equal(forced.status, 200);
   assert.equal(readFileSync(file, 'utf8'), 'mine');
-  assert.equal(ctx.writes.at(-1).intent, undefined);
+  assert.equal(ctx.writes.at(-1)!.intent, undefined);
 });
 
 test('the Session sandbox policy is enforced and never widened', async () => {
@@ -145,10 +162,14 @@ test('missing files, directories and unmapped paths are refused', async () => {
 });
 
 test('registerSaveRoute registers POST, serves, and disposes', async () => {
-  let route; let removed = false;
+  let route: FetchRoute | undefined; let removed = false;
   const file = fresh('e.txt');
-  const ctx = fakeCtx({ extra: { connection: { fetch: { register(r) { route = r; return () => { removed = true; }; } } } } });
+  const ctx: SaveRegisterContext & { writes: Write[] } = {
+    ...fakeCtx(),
+    connection: { fetch: { register(r) { route = r; return () => { removed = true; }; } } },
+  };
   const dispose = registerSaveRoute(ctx);
+  assert.ok(route);
   assert.equal(route.path, '/api/save.file');
   assert.deepEqual(route.methods, ['POST']);
   assert.equal(route.requestBody, 'buffered');

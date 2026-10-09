@@ -24,12 +24,13 @@
   "type": "module",
   "icon": "./src/assets/icon.svg",
   "exports": {
-    ".": "./src/index.js",
-    "./client": "./src/client.js",
+    ".": "./dist/index.js",
+    "./client": "./dist/client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
+    "dist",
     "src",
     "cordis.patch.yml",
     "locale",
@@ -37,9 +38,15 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check src/index.js && node --check src/download-route.js && node --check src/save-route.js && node --check src/client.js",
-    "test": "node --test \"test/*.test.js\"",
-    "test:e2e": "node e2e/browser.e2e.mjs"
+    "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.client.json",
+    "check": "tsc -p tsconfig.json && tsc -p tsconfig.client.json --noEmit",
+    "prepare": "npm run build",
+    "test": "node --test \"test/*.test.ts\"",
+    "test:e2e": "npm run build && node e2e/browser.e2e.mts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "typescript": "^7.0.2"
   },
   "publishConfig": {
     "access": "public",

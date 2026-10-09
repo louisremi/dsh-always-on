@@ -16,6 +16,8 @@ dsh plugin --profile web add @louisremi/dsh-docker-adapter
 
 Use the name of the profile your Harness runs with. The plugin loads live; restart the Harness only if the command says a restart is required.
 
+Installing from a git URL builds the plugin on install (`prepare` runs `npm run build`). If your profile is managed by pnpm it may block build scripts until you approve them (`allowBuilds`); a skipped build leaves the plugin without its `dist/`.
+
 ## Usage
 
 Nothing to configure.
@@ -39,7 +41,7 @@ The plugin adds two authenticated routes to the Harness, `GET /api/download.file
 
 ### The editor and the CDN
 
-To keep the package at ~19 kB, Monaco is **not bundled**. On the first Edit it is loaded from [jsDelivr](https://www.jsdelivr.com/) at a pinned version (`monaco-editor@0.52.2`).
+To keep the package small (~69 kB), Monaco is **not bundled**. On the first Edit it is loaded from [jsDelivr](https://www.jsdelivr.com/) at a pinned version (`monaco-editor@0.52.2`).
 
 - It runs in a **sandboxed iframe** (`sandbox="allow-scripts"`, no `allow-same-origin`) with a Content-Security-Policy that only permits the CDN. The CDN's code therefore cannot read the Harness page, your session cookie, local storage, or call the Harness API; it only exchanges messages with the editor wrapper.
 - The loader script is checked with Subresource Integrity (SRI). Files the loader then pulls in are not individually pinned by hash, which is why the isolation above matters.
@@ -54,13 +56,17 @@ To keep the package at ~19 kB, Monaco is **not bundled**. On the first Edit it i
 
 ## Development
 
+The source is TypeScript; `npm run build` compiles it to `dist/` (it also runs automatically via `prepare` on install and pack). The tests run `.ts` files directly through Node's native type stripping, so **developing** needs Node ≥ 22.18 (or ≥ 23.6) — the plugin itself still only requires Node ≥ 20 at runtime.
+
 ```sh
-npm run check      # syntax check
+npm ci
+npm run check      # TypeScript typecheck of src, tests and e2e
+npm run build      # compile src/ to dist/
 npm test           # host route unit tests (no browser needed)
-npm run test:e2e   # opt-in: real headless Chromium + real Monaco from the CDN
+npm run test:e2e   # opt-in: real headless Chromium + real Monaco from the CDN (builds first)
 ```
 
-`test:e2e` needs Chromium, `playwright-core` and React 18 UMD builds; see the header of `e2e/browser.e2e.mjs`.
+`test:e2e` needs Chromium, `playwright-core` and React 18 UMD builds; see the header of `e2e/browser.e2e.mts`.
 
 ## Uninstall
 

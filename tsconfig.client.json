@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "sourceMap": true,
+    "inlineSources": true
+  },
+  "include": [],
+  "files": ["src/client.ts"]
+}

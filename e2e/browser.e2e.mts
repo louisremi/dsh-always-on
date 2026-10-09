@@ -1,7 +1,7 @@
 /**
  * Opt-in browser end-to-end suite: `npm run test:e2e`.
  *
- * Drives src/client.js and the real save route in headless Chromium against the
+ * Drives dist/client.js and the real save route in headless Chromium against the
  * REAL Monaco build on jsDelivr (needs internet), including a CDN-blocked
  * run, edit conflicts and the iframe sandbox isolation. Not part of
  * `npm test` / CI because it needs a browser and network.
@@ -11,29 +11,31 @@
  * UMD builds (REACT_UMD / REACT_DOM_UMD, or `npm i --no-save react@18 react-dom@18`).
  */
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
+import type { SaveContext } from '../src/context.ts';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_CORE ?? 'playwright-core');
 const REACT_UMD = process.env.REACT_UMD ?? require.resolve('react/umd/react.development.js');
 const REACT_DOM_UMD = process.env.REACT_DOM_UMD ?? require.resolve('react-dom/umd/react-dom.development.js');
-const { handleSave } = await import('../src/save-route.js');
+const { handleSave } = await import('../src/save-route.ts');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
-const versionOf = (p) => { const s = statSync(p, { bigint: true }); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}`; };
-const writes = [];
-const hostCtx = {
+const versionOf = (p: string) => { const s = statSync(p, { bigint: true }); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}`; };
+const writes: string[] = [];
+const hostCtx: SaveContext = {
   fs: {
     processPathFromHostPath: (p) => p,
     resolve: async (p) => ({ displayPath: p }),
-    stat: async (t) => { try { const s = statSync(t.displayPath); return { type: s.isFile() ? 'file' : 'directory', size: s.size }; } catch { return undefined; } },
+    stat: async (t) => { try { const s = statSync(t.displayPath!); return { type: s.isFile() ? 'file' : 'directory', size: s.size }; } catch { return undefined; } },
     writeText: async (t, content, intent) => {
-      if (intent?.kind === 'replaceIfVersion' && intent.version !== versionOf(t.displayPath)) throw Object.assign(new Error('stale'), { code: 'FS_STALE_VERSION' });
-      writeFileSync(t.displayPath, content); writes.push(content);
-      return { operation: 'update', version: versionOf(t.displayPath) };
+      if (intent?.kind === 'replaceIfVersion' && intent.version !== versionOf(t.displayPath!)) throw Object.assign(new Error('stale'), { code: 'FS_STALE_VERSION' });
+      writeFileSync(t.displayPath!, content); writes.push(content);
+      return { operation: 'update', version: versionOf(t.displayPath!) };
     },
   },
   sessions: { get: (id) => (id === 'sess' ? { id } : undefined) },
@@ -82,7 +84,7 @@ if(params.get('what')==='titles')window.__mountTitles((params.get('t')||'').spli
 // The real FileTypeIcon + classifyFileType source, cut out of the installed Harness' primitives
 // bundle (its CSS-module/jsx helpers are shimmed). Absent => the icon test is skipped.
 const PRIMITIVES = process.env.DSH_PRIMITIVES ?? '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-primitives/lib/index.js';
-let ftModule;
+let ftModule: string | undefined;
 try {
   const lines = readFileSync(PRIMITIVES, 'utf8').split('\n');
   const from = lines.findIndex((l) => l.startsWith('//#region lib/types/code-file-icon-artwork.js'));
@@ -97,43 +99,43 @@ window.__ft = { FileTypeIcon, classifyFileType };`;
 } catch { ftModule = undefined; }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
-  const send = (code, body, type = 'text/plain') => { res.writeHead(code, { 'content-type': type }); res.end(body); };
+  const url = new URL(req.url ?? '/', 'http://x');
+  const send = (code: number, body: string | Buffer, type = 'text/plain') => { res.writeHead(code, { 'content-type': type }); res.end(body); };
   if (url.pathname === '/') return send(200, PAGE, 'text/html');
   if (url.pathname === '/react.js') return send(200, readFileSync(REACT_UMD), 'text/javascript');
   if (url.pathname === '/react-dom.js') return send(200, readFileSync(REACT_DOM_UMD), 'text/javascript');
   if (url.pathname === '/ft.js') return send(200, ftModule ?? '', 'text/javascript');
-  if (url.pathname === '/client.js') return send(200, readFileSync(new URL('../src/client.js', import.meta.url)), 'text/javascript');
+  if (url.pathname === '/client.js') return send(200, readFileSync(new URL('../dist/client.js', import.meta.url)), 'text/javascript');
   if (url.pathname === '/fs/read') {
-    const p = url.searchParams.get('path');
+    const p = url.searchParams.get('path') ?? '';
     try { const b = readFileSync(p); return send(200, JSON.stringify({ b64: b.toString('base64'), version: versionOf(p) }), 'application/json'); }
     catch { return send(404, 'nope'); }
   }
   if (url.pathname === '/api/save.file') {
-    const body = await new Promise((r) => { const c = []; req.on('data', (d) => c.push(d)); req.on('end', () => r(Buffer.concat(c))); });
-    const out = await handleSave(hostCtx, new Request('http://x/api/save.file', { method: req.method, body: body.length ? body : undefined }));
+    const body = await new Promise<Buffer>((r) => { const c: Buffer[] = []; req.on('data', (d) => c.push(d)); req.on('end', () => r(Buffer.concat(c))); });
+    const out = await handleSave(hostCtx, new Request('http://x/api/save.file', { method: req.method, body: body.length ? new Uint8Array(body) : undefined }));
     return send(out.status, await out.text(), 'application/json');
   }
   send(404, 'not found');
 });
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const base = `http://127.0.0.1:${server.address().port}`;
+await new Promise<void>((r) => { server.listen(0, '127.0.0.1', () => r()); });
+const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium', args: ['--no-sandbox'] });
-const results = [];
-const check = async (name, fn) => {
+const results: [string, string, string?, string[]?][] = [];
+const check = async (name: string, fn: (page: any, logs: string[]) => Promise<void>) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  const logs = [];
-  page.on('console', (m) => { if (['error', 'warning'].includes(m.type())) logs.push(`${m.type()}: ${m.text()}`); });
-  page.on('pageerror', (e) => logs.push(`pageerror: ${e.message}`));
+  const logs: string[] = [];
+  page.on('console', (m: any) => { if (['error', 'warning'].includes(m.type())) logs.push(`${m.type()}: ${m.text()}`); });
+  page.on('pageerror', (e: any) => logs.push(`pageerror: ${e.message}`));
   try { await fn(page, logs); results.push(['PASS', name]); }
-  catch (e) { results.push(['FAIL', name, e.message.split('\n')[0], logs.slice(0, 6)]); }
+  catch (e) { results.push(['FAIL', name, (e as Error).message.split('\n')[0], logs.slice(0, 6)]); }
   await context.close();
 };
-const addr = (file) => `dsh-resource://file/session/sess/${encodeURIComponent(file).replace(/%2F/g, '/')}`;
-const open = (page, file, extra = '') => page.goto(`${base}/?what=editor&addr=${encodeURIComponent(addr(file))}${extra}`);
-const monacoFrame = async (page) => {
+const addr = (file: string) => `dsh-resource://file/session/sess/${encodeURIComponent(file).replace(/%2F/g, '/')}`;
+const open = (page: any, file: string, extra = '') => page.goto(`${base}/?what=editor&addr=${encodeURIComponent(addr(file))}${extra}`);
+const monacoFrame = async (page: any) => {
   const handle = await page.waitForSelector('iframe.dlf-ed-frame', { timeout: 15000 });
   const frame = await handle.contentFrame();
   await frame.waitForSelector('.monaco-editor', { timeout: 60000 });
@@ -166,7 +168,7 @@ await check('real Monaco loads from the CDN inside the sandboxed iframe, edits a
   const sandbox = await page.getAttribute('iframe.dlf-ed-frame', 'sandbox');
   assert.equal(sandbox, 'allow-scripts');
   assert.equal(await page.$('.dlf-ed-note'), null, 'no plain-text notice when Monaco works');
-  await frame.waitForFunction(() => /const a = 1;/.test(document.querySelector('.view-lines').textContent.replace(/\u00a0/g, ' ')), null, { timeout: 15000 });
+  await frame.waitForFunction(() => /const a = 1;/.test(document.querySelector('.view-lines')!.textContent!.replace(/\u00a0/g, ' ')), null, { timeout: 15000 });
   await frame.click('.monaco-editor .view-lines');
   await page.keyboard.press('Control+End');
   await page.keyboard.type('// edited');
@@ -197,7 +199,7 @@ await check('Save button saves; second edit after save uses the fresh version', 
   await page.click('.dlf-ed-bar .dlf-ed-btn');
   await page.waitForFunction(() => /editor\.saved/.test(document.querySelector('.dlf-ed-status')?.textContent ?? ''), null, { timeout: 8000 });
   assert.equal(readFileSync(f, 'utf8'), 'one two three');
-  assert.equal(await frame.evaluate(() => document.querySelector('.monaco-editor').classList.contains('vs-dark')), true, 'dark theme applied');
+  assert.equal(await frame.evaluate(() => document.querySelector('.monaco-editor')!.classList.contains('vs-dark')), true, 'dark theme applied');
 });
 
 await check('external change → 409 conflict banner; Overwrite then wins; file never clobbered silently', async (page) => {
@@ -210,7 +212,7 @@ await check('external change → 409 conflict banner; Overwrite then wins; file 
   await page.keyboard.press('Control+s');
   await page.waitForSelector('.dlf-ed-banner');
   assert.equal(readFileSync(f, 'utf8'), 'changed on disk by someone else');
-  const buttons = await page.$$eval('.dlf-ed-banner button', (b) => b.map((x) => x.textContent));
+  const buttons = await page.$$eval('.dlf-ed-banner button', (b: any[]) => b.map((x) => x.textContent));
   assert.deepEqual(buttons, ['editor.reload', 'editor.overwrite', 'editor.keep']);
   await page.click('.dlf-ed-banner button:nth-of-type(2)');
   await page.waitForFunction(() => !document.querySelector('.dlf-ed-banner'));
@@ -228,14 +230,14 @@ await check('conflict → Reload from disk replaces the buffer', async (page) =>
   await page.waitForSelector('.dlf-ed-banner');
   await page.click('.dlf-ed-banner button:nth-of-type(1)');
   await page.waitForFunction(() => !document.querySelector('.dlf-ed-banner'));
-  await frame.waitForFunction(() => /v2 from disk/.test(document.querySelector('.view-lines').textContent.replace(/\u00a0/g, ' ')), null, { timeout: 15000 });
+  await frame.waitForFunction(() => /v2 from disk/.test(document.querySelector('.view-lines')!.textContent!.replace(/\u00a0/g, ' ')), null, { timeout: 15000 });
   assert.equal(await page.$('.dlf-ed-dot'), null);
   assert.equal(readFileSync(f, 'utf8'), 'v2 from disk');
 });
 
 await check('CDN unreachable → plain textarea fallback still edits and saves (CRLF kept)', async (page) => {
   const f = join(dir, 'plain.txt'); writeFileSync(f, 'a\r\nb\r\n');
-  await page.route('https://cdn.jsdelivr.net/**', (route) => route.abort());
+  await page.route('https://cdn.jsdelivr.net/**', (route: any) => route.abort());
   await open(page, f);
   await page.waitForSelector('textarea.dlf-ed-text', { timeout: 20000 });
   assert.ok(await page.$('.dlf-ed-note'), 'plain-text notice shown');
@@ -260,14 +262,14 @@ await check('binary / oversized / missing files are refused with a message, neve
 
 await check('close handler: confirm discards or keeps a dirty tab', async (page) => {
   const f = join(dir, 'close.txt'); writeFileSync(f, 'q');
-  await page.route('https://cdn.jsdelivr.net/**', (route) => route.abort());
+  await page.route('https://cdn.jsdelivr.net/**', (route: any) => route.abort());
   await open(page, f);
   await page.waitForSelector('textarea.dlf-ed-text', { timeout: 20000 });
   await page.fill('textarea.dlf-ed-text', 'dirty');
   await page.waitForSelector('.dlf-ed-dot');
   let asked = 0; let answer = false;
-  page.on('dialog', (d) => { asked += 1; (answer ? d.accept() : d.dismiss()); });
-  const closeCall = () => page.evaluate(() => { try { window.__closeHandlers['dlf-editor']('sess', { id: 'tab1', title: 'close.txt' }); return 'closed'; } catch (e) { return 'kept: ' + e.message; } });
+  page.on('dialog', (d: any) => { asked += 1; (answer ? d.accept() : d.dismiss()); });
+  const closeCall = () => page.evaluate(() => { try { window.__closeHandlers['dlf-editor']('sess', { id: 'tab1', title: 'close.txt' }); return 'closed'; } catch (e) { return 'kept: ' + (e as Error).message; } });
   assert.match(await closeCall(), /^kept: close cancelled/);
   answer = true;
   assert.equal(await closeCall(), 'closed');
@@ -280,7 +282,7 @@ await check('sandbox isolation: CDN code in the frame cannot reach the page, its
   await page.evaluate(() => { document.cookie = 'dsh=top-secret'; localStorage.setItem('k', 'v'); });
   const frame = await monacoFrame(page);
   const probe = await frame.evaluate(async () => {
-    const out = {};
+    const out: Record<string, unknown> = {};
     try { out.parentDom = typeof parent.document.cookie; } catch (e) { out.parentDom = 'blocked'; }
     try { out.storage = String(localStorage.getItem('k')); } catch (e) { out.storage = 'blocked'; }
     try { out.cookie = document.cookie; } catch (e) { out.cookie = 'blocked'; }
@@ -299,7 +301,7 @@ await check('sandbox isolation: CDN code in the frame cannot reach the page, its
 
 await check('save 404 from a missing ROUTE is reported as such, not as "file no longer exists"', async (page) => {
   const f = join(dir, 'noroute.txt'); writeFileSync(f, 'a');
-  await page.route('**/api/save.file', (route) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'not found' }));
+  await page.route('**/api/save.file', (route: any) => route.fulfill({ status: 404, contentType: 'text/plain', body: 'not found' }));
   await open(page, f);
   const frame = await monacoFrame(page);
   await frame.click('.monaco-editor .view-lines');
@@ -325,23 +327,23 @@ await check('editor tab title shows the stock file-type icon (FileTypeIcon + cla
   const names = ['.gitignore', 'README.md', 'package.json', 'client.js', 'cordis.patch.yml', 'notes.txt', 'Dockerfile'];
   await page.goto(`${base}/?what=titles&t=${encodeURIComponent(names.join('|'))}`);
   await page.waitForSelector('[data-title] svg');
-  const rows = await page.$$eval('[data-title]', (els) => els.map((e) => ({
+  const rows = await page.$$eval('[data-title]', (els: any[]) => els.map((e) => ({
     title: e.dataset.title, svg: !!e.querySelector('svg'), size: e.querySelector('svg')?.getAttribute('width'),
     cls: e.querySelector('svg')?.getAttribute('class') ?? '',
-    own: [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(''),
+    own: [...e.childNodes].filter((n: any) => n.nodeType === 3).map((n: any) => n.textContent).join(''),
   })));
   for (const r of rows) {
     assert.ok(r.svg && r.size === '16' && /dlf-ed-titleIcon/.test(r.cls), `${r.title}: 16px icon with our class`);
     assert.equal(r.own, r.title, `${r.title}: title text unchanged`);
   }
-  const looks = await page.$$eval('[data-title] svg', (s) => new Set(s.map((x) => x.innerHTML.length + ':' + x.getAttribute('class'))).size);
+  const looks = await page.$$eval('[data-title] svg', (s: any[]) => new Set(s.map((x) => x.innerHTML.length + ':' + x.getAttribute('class'))).size);
   assert.ok(looks > 2, 'icons differ by file type');
 });
 
 await check('editor tab title degrades to text only when the primitives are unavailable', async (page) => {
   await page.goto(`${base}/?what=titles&prim=none&t=${encodeURIComponent('a.js|b.md')}`);
   await page.waitForSelector('[data-title]');
-  const bare = await page.$$eval('[data-title]', (els) => els.map((e) => ({ svg: !!e.querySelector('svg'), text: e.textContent })));
+  const bare = await page.$$eval('[data-title]', (els: any[]) => els.map((e) => ({ svg: !!e.querySelector('svg'), text: e.textContent })));
   assert.deepEqual(bare, [{ svg: false, text: 'a.js' }, { svg: false, text: 'b.md' }]);
 });
 

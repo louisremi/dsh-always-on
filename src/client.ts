@@ -8,10 +8,40 @@
  *  - "Edit" opens a file in a sidebar editor tab (Monaco, loaded from a CDN
  *    inside a sandboxed iframe; plain textarea when the CDN is unreachable).
  *
+ * This file is a classic script, not a module: dsh serves `exports["./client"]`
+ * verbatim to the browser, which registers it through `window.__ModuleLoader__`.
+ * It must keep no top-level `import`/`export`; TypeScript only adds types here
+ * (see tsconfig: `erasableSyntaxOnly`).
+ *
  * Slots keep one cell per `id` and the lowest `priority` wins, so registering
  * the stock id `open-in-app` at priority -1 shadows the stock control without
  * modifying it; disabling this plugin brings the stock buttons back.
  */
+
+/** The loader dsh's page runtime installs before loading plugin clients. */
+interface DlfModuleLoader {
+  load(entry: { id: string; factory(require: DlfAmdRequire): unknown }): void;
+}
+
+/** The bundle's CommonJS-style require inside the factory; the AMD loader's require inside the iframe. */
+interface DlfAmdRequire {
+  (specifier: string): any;
+  (deps: string[], success?: (installed?: unknown) => void, error?: (error: unknown) => void): void;
+  config(options: Record<string, unknown>): void;
+}
+
+// This file compiles as a classic script (module: preserve in
+// tsconfig.client.json; with no import/export the emit is the plain script
+// dsh serves to the browser), so these top-level declarations are global:
+// the interface below merges with lib.dom's `Window`, giving
+// `window.__ModuleLoader__` its type.
+interface Window {
+  __ModuleLoader__: DlfModuleLoader;
+  /** Set by the sandboxed iframe's own worker bootstrap; `monaco` by the AMD loader there. */
+  MonacoEnvironment?: unknown;
+  monaco?: any;
+}
+
 window.__ModuleLoader__.load({
   id: '@louisremi/dsh-docker-adapter',
   factory(require) {
@@ -26,7 +56,7 @@ window.__ModuleLoader__.load({
 
     const EDITOR_ID = '@louisremi/dsh-docker-adapter/editor';
     const EDITOR_KIND = 'dlf-editor';
-    /** Largest file the editor opens; keep in step with MAX_SAVE_BYTES in src/save-route.js. */
+    /** Largest file the editor opens; keep in step with MAX_SAVE_BYTES in src/save-route.ts. */
     const MAX_EDIT_BYTES = 1024 * 1024;
     const FRAME_LOAD_TIMEOUT_MS = 15000;
     const FRAME_REPLY_TIMEOUT_MS = 5000;
@@ -43,6 +73,8 @@ window.__ModuleLoader__.load({
 
     /** Extensions the editor never offers (the editor also refuses binary content itself). */
     const BINARY_EXTENSIONS = /\.(png|jpe?g|gif|webp|avif|bmp|ico|tiff?|heic|pdf|docx?|xlsx?|pptx?|odt|ods|odp|zip|gz|tgz|bz2|xz|7z|rar|tar|jar|war|exe|dll|so|dylib|bin|class|o|a|wasm|mp3|mp4|m4a|mov|avi|mkv|webm|wav|flac|ogg|woff2?|ttf|otf|eot|sqlite3?|db|pyc|iso|dmg)$/i;
+
+    type Translate = (key: string, params?: Record<string, unknown>) => string;
 
     const en = {
       'download.title': 'Download file',
@@ -75,13 +107,13 @@ window.__ModuleLoader__.load({
       'files.show': '显示文件',
       'edit.title': '编辑文件',
       'editor.save': '保存',
-      'editor.saving': '正在保存…',
+      'editor.saving': '正在保存',
       'editor.saved': '已保存',
-      'editor.unsaved': '有未保存的更改',
-      'editor.loading': '正在打开…',
+      'editor.unsaved': '有未保存的修改',
+      'editor.loading': '正在打开',
       'editor.plain': '纯文本模式（代码编辑器不可用）',
-      'editor.discard': '放弃对 {name} 的未保存更改？',
-      'editor.conflict': '此文件在你打开后已在磁盘上被修改。',
+      'editor.discard': '要放弃对 {name} 的未保存修改吗？',
+      'editor.conflict': '打开此文件后，磁盘上的内容已发生变化。',
       'editor.reload': '从磁盘重新加载',
       'editor.overwrite': '覆盖',
       'editor.keep': '继续编辑',
@@ -125,14 +157,14 @@ window.__ModuleLoader__.load({
 
     // ───────────────────────────── icons ─────────────────────────────
 
-    function Svg({ size, children }) {
+    function Svg({ size, children }: { size: number; children?: any }) {
       return h('svg', {
         width: size, height: size, viewBox: '0 0 16 16', fill: 'none',
         'aria-hidden': 'true', strokeWidth: 1,
       }, children);
     }
 
-    function DownloadIcon({ size }) {
+    function DownloadIcon({ size }: { size: number }) {
       return h(Svg, { size },
         h('path', { d: 'M8 1.95317V10.0469', stroke: 'currentColor' }),
         h('path', { d: 'M4.25 6.29688L8 10.0469L11.75 6.29688', stroke: 'currentColor' }),
@@ -142,7 +174,7 @@ window.__ModuleLoader__.load({
         }));
     }
 
-    function FilesIcon({ size }) {
+    function FilesIcon({ size }: { size: number }) {
       return h(Svg, { size },
         h('path', {
           d: 'M1.5 3.5C1.5 2.948 1.948 2.5 2.5 2.5H6L7.5 4.25H13.5C14.052 4.25 14.5 4.698 14.5 5.25V12.5C14.5 13.052 14.052 13.5 13.5 13.5H2.5C1.948 13.5 1.5 13.052 1.5 12.5V3.5Z',
@@ -150,7 +182,7 @@ window.__ModuleLoader__.load({
         }));
     }
 
-    function EditIcon({ size }) {
+    function EditIcon({ size }: { size: number }) {
       return h(Svg, { size },
         h('path', { d: 'M10.5 2.5L13.5 5.5L5.5 13.5H2.5V10.5L10.5 2.5Z', stroke: 'currentColor' }),
         h('path', { d: 'M9 4L12 7', stroke: 'currentColor' }));
@@ -158,17 +190,27 @@ window.__ModuleLoader__.load({
 
     // ─────────────────────────── file addresses ───────────────────────────
 
+    // Sidebar surface the buttons drive: tab switching, resource tabs, close guards.
+    interface SidebarRight {
+      openTab(tab: string): unknown;
+      openResource(address: string, options: { kind: string }): unknown;
+      registerCloseHandler(
+        kind: string,
+        handler: (sessionId: string, tab: { id: string; title: string }) => void,
+      ): unknown;
+    }
+
     // Same grammar as the stock `dsh-resource://file/session/<id>/<path>` address.
     const FILE_ADDRESS_PREFIX = 'dsh-resource://file/';
-    const encodeSegment = (segment) => encodeURIComponent(segment).replace(/%3A/gi, ':');
+    const encodeSegment = (segment: string) => encodeURIComponent(segment).replace(/%3A/gi, ':');
 
-    function sessionFileAddress(sessionId, path) {
+    function sessionFileAddress(sessionId: string, path: string): string {
       const normalized = path.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
       return `${FILE_ADDRESS_PREFIX}session/${encodeSegment(sessionId)}/${normalized.split('/').map(encodeSegment).join('/')}`;
     }
 
     /** { sessionId, path } of a session file address, or undefined. */
-    function parseFileAddress(address) {
+    function parseFileAddress(address: unknown): { sessionId: string; path: string } | undefined {
       try {
         if (typeof address !== 'string' || !address.startsWith(FILE_ADDRESS_PREFIX)) return undefined;
         const end = address.search(/[?#]/);
@@ -180,12 +222,12 @@ window.__ModuleLoader__.load({
       }
     }
 
-    const baseName = (path) => path.split('/').filter(Boolean).pop() ?? path;
+    const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 
     // ───────────────────────── download buttons ─────────────────────────
 
     /** Trigger a browser download of `url` without buffering it in JS memory. */
-    function startDownload(url) {
+    function startDownload(url: string) {
       const a = document.createElement('a');
       a.href = url;
       a.download = '';
@@ -200,7 +242,7 @@ window.__ModuleLoader__.load({
      * Check the route answers before handing the URL to the browser, so a
      * failure is shown on the button instead of as a failed download.
      */
-    async function preflight(url) {
+    async function preflight(url: string): Promise<boolean> {
       try {
         return (await fetch(url, { method: 'HEAD' })).ok;
       } catch {
@@ -208,7 +250,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function DownloadButton({ url, large, t }) {
+    function DownloadButton({ url, large, t }: { url: string; large?: boolean; t: Translate }) {
       const [state, setState] = React.useState('idle');
       const timer = React.useRef(undefined);
       React.useEffect(() => () => { clearTimeout(timer.current); }, []);
@@ -247,7 +289,7 @@ window.__ModuleLoader__.load({
      * button that opens the sidebar file explorer through the sidebar's public
      * `openTab('files')`, which works without a desktop on the Harness host.
      */
-    function ShowFiles({ sidebarRight, t }) {
+    function ShowFiles({ sidebarRight, t }: { sidebarRight: SidebarRight; t: Translate }) {
       const label = t('files.show');
       return h('div', { className: 'dlf-split', 'data-size': 'compact', 'data-show-files': '' },
         h('button', {
@@ -264,7 +306,9 @@ window.__ModuleLoader__.load({
     }
 
     /** Opens a previewed file in the sidebar editor tab. */
-    function EditButton({ sessionId, absolutePath, sidebarRight, t }) {
+    function EditButton({ sessionId, absolutePath, sidebarRight, t }: {
+      sessionId?: unknown; absolutePath?: unknown; sidebarRight: SidebarRight; t: Translate;
+    }) {
       if (typeof sessionId !== 'string' || typeof absolutePath !== 'string'
         || BINARY_EXTENSIONS.test(absolutePath)) return null;
       const label = t('edit.title');
@@ -285,7 +329,8 @@ window.__ModuleLoader__.load({
     }
 
     /** Download URL for a stock `api/present.open|changes.open?…` action URL. */
-    function routeUrl(actionUrl) {
+    function routeUrl(actionUrl: unknown): string | undefined {
+      if (typeof actionUrl !== 'string') return undefined;
       const from = new URL(actionUrl, document.baseURI);
       const source = from.pathname.endsWith('/changes.open') ? 'changes'
         : from.pathname.endsWith('/present.open') ? 'present' : undefined;
@@ -299,7 +344,7 @@ window.__ModuleLoader__.load({
       return to.href;
     }
 
-    function pathUrl(absolutePath) {
+    function pathUrl(absolutePath: string): string {
       const to = new URL(ROUTE, document.baseURI);
       to.searchParams.set('path', absolutePath);
       return to.href;
@@ -308,20 +353,21 @@ window.__ModuleLoader__.load({
     // ─────────────────────── text helpers (pure) ───────────────────────
 
     /** Dominant line ending of `text`. */
-    function dominantEol(text) {
+    function dominantEol(text: string): string {
       const crlf = (text.match(/\r\n/g) ?? []).length;
       const lf = (text.match(/\n/g) ?? []).length - crlf;
       return crlf > lf ? '\r\n' : '\n';
     }
 
-    const toLf = (text) => text.replace(/\r\n/g, '\n');
-    const withEol = (text, eol) => (eol === '\r\n' ? text.replace(/\r?\n/g, '\r\n') : text);
+    const toLf = (text: string) => text.replace(/\r\n/g, '\n');
+    const withEol = (text: string, eol: string) => (eol === '\r\n' ? text.replace(/\r?\n/g, '\r\n') : text);
 
     /**
      * Decode a file's bytes as strict UTF-8, keeping a leading BOM so a save
      * writes it back. Returns { text } or { reason: 'notText' }.
      */
-    function decodeText(bytes) {
+    function decodeText(bytes: Uint8Array):
+      { reason?: undefined; text: string } | { reason: 'notText'; text?: undefined } {
       if (bytes.subarray(0, 8192).includes(0)) return { reason: 'notText' };
       try {
         return { text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes) };
@@ -330,7 +376,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    const formatBytes = (n) => (n >= 1024 * 1024 ? `${n / 1024 / 1024} MiB` : `${Math.round(n / 1024)} KiB`);
+    const formatBytes = (n: number) => (n >= 1024 * 1024 ? `${n / 1024 / 1024} MiB` : `${Math.round(n / 1024)} KiB`);
 
     // ─────────────────── Monaco in a sandboxed iframe ───────────────────
 
@@ -340,10 +386,10 @@ window.__ModuleLoader__.load({
      * Protocol, frame → parent: loaded, ready, dirty, save, content, error.
      * Parent → frame: init, getContent, setContent, markSaved, theme, focus.
      */
-    function frameMain(config) {
-      const send = (message) => { parent.postMessage(message, '*'); };
-      const fail = (message) => { send({ type: 'error', message: String(message) }); };
-      window.addEventListener('error', (event) => { fail(event.message); });
+    function frameMain(config: { base: string }) {
+      const send = (message: unknown) => { parent.postMessage(message, '*'); };
+      const fail = (message: unknown) => { send({ type: 'error', message: String(message) }); };
+      window.addEventListener('error', (event: ErrorEvent) => { fail(event.message); });
       if (typeof require === 'undefined' || typeof require.config !== 'function') {
         fail('loader unavailable');
         return;
@@ -353,9 +399,9 @@ window.__ModuleLoader__.load({
       self.MonacoEnvironment = { getWorkerUrl: () => workerUrl };
       require.config({ paths: { vs: config.base } });
 
-      let monaco;
-      let editor;
-      let model;
+      let monaco: any;
+      let editor: any;
+      let model: any;
       let savedId = 0;
       let lastDirty = false;
       const report = () => {
@@ -363,8 +409,8 @@ window.__ModuleLoader__.load({
         if (dirty !== lastDirty) { lastDirty = dirty; send({ type: 'dirty', dirty }); }
       };
 
-      const handlers = {
-        init(message) {
+      const handlers: Record<string, (message: any) => void> = {
+        init(message: any) {
           model = monaco.editor.createModel(message.content, undefined, monaco.Uri.file(message.fileName));
           editor = monaco.editor.create(document.getElementById('c'), {
             model,
@@ -380,23 +426,23 @@ window.__ModuleLoader__.load({
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { send({ type: 'save' }); });
           send({ type: 'ready' });
         },
-        getContent(message) {
+        getContent(message: any) {
           send({ type: 'content', id: message.id, content: model.getValue(), token: model.getAlternativeVersionId() });
         },
-        setContent(message) {
+        setContent(message: any) {
           model.setValue(message.content);
           savedId = model.getAlternativeVersionId();
           report();
         },
-        markSaved(message) {
+        markSaved(message: any) {
           savedId = message.token;
           report();
         },
-        theme(message) { monaco.editor.setTheme(message.dark ? 'vs-dark' : 'vs'); },
+        theme(message: any) { monaco.editor.setTheme(message.dark ? 'vs-dark' : 'vs'); },
         focus() { editor.focus(); },
       };
 
-      window.addEventListener('message', (event) => {
+      window.addEventListener('message', (event: MessageEvent) => {
         if (event.source !== parent) return;
         const message = event.data;
         const handler = message !== null && typeof message === 'object' ? handlers[message.type] : undefined;
@@ -407,7 +453,7 @@ window.__ModuleLoader__.load({
       require(['vs/editor/editor.main'], () => {
         monaco = window.monaco;
         send({ type: 'loaded' });
-      }, (error) => { fail(error); });
+      }, (error: unknown) => { fail(error); });
     }
 
     /** The iframe document: pinned loader with SRI, a CSP limiting everything to the CDN. */
@@ -430,7 +476,7 @@ window.__ModuleLoader__.load({
         + `<script>${main}</script></body></html>`;
     }
 
-    let cachedFrameDocument;
+    let cachedFrameDocument: string | undefined;
     const frameHtml = () => (cachedFrameDocument ??= frameDocument());
 
     // ───────────────────────────── editors ─────────────────────────────
@@ -438,7 +484,10 @@ window.__ModuleLoader__.load({
     // markSaved(token), focus().
 
     const MonacoFrame = React.forwardRef(function MonacoFrame(
-      { fileName, initial, dark, onDirty, onSave, onFail }, ref) {
+      { fileName, initial, dark, onDirty, onSave, onFail }: {
+        fileName: string; initial: string; dark: boolean;
+        onDirty: (dirty: boolean) => void; onSave: () => void; onFail: (reason: unknown) => void;
+      }, ref: any) {
       const frame = React.useRef(null);
       const replies = React.useRef(new Map());
       const sequence = React.useRef(0);
@@ -446,7 +495,7 @@ window.__ModuleLoader__.load({
       const callbacks = React.useRef({ onDirty, onSave, onFail });
       callbacks.current = { onDirty, onSave, onFail };
 
-      const post = React.useCallback((message) => {
+      const post = React.useCallback((message: unknown) => {
         frame.current?.contentWindow?.postMessage(message, '*');
       }, []);
 
@@ -454,12 +503,12 @@ window.__ModuleLoader__.load({
         // Once the editor is up, its text may be unsaved: a late error is only
         // logged, never a reason to swap the editor out from under the user.
         let ready = false;
-        const failed = (reason) => {
+        const failed = (reason: unknown) => {
           if (ready) console.warn('monaco frame error after ready:', reason);
           else callbacks.current.onFail(reason);
         };
         const timer = setTimeout(() => { failed('timeout'); }, FRAME_LOAD_TIMEOUT_MS);
-        const onMessage = (event) => {
+        const onMessage = (event: MessageEvent) => {
           if (event.source !== frame.current?.contentWindow) return;
           const message = event.data;
           if (message === null || typeof message !== 'object') return;
@@ -490,7 +539,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { post({ type: 'theme', dark }); }, [dark, post]);
 
       React.useImperativeHandle(ref, () => ({
-        getContent: () => new Promise((resolve, reject) => {
+        getContent: () => new Promise<{ content: string; token: unknown }>((resolve, reject) => {
           sequence.current += 1;
           const id = sequence.current;
           const timer = setTimeout(() => {
@@ -498,13 +547,13 @@ window.__ModuleLoader__.load({
             reject(new Error('editor did not answer'));
           }, FRAME_REPLY_TIMEOUT_MS);
           replies.current.set(id, {
-            resolve: (value) => { clearTimeout(timer); resolve(value); },
-            reject: (error) => { clearTimeout(timer); reject(error); },
+            resolve: (value: unknown) => { clearTimeout(timer); resolve(value as { content: string; token: unknown }); },
+            reject: (error: unknown) => { clearTimeout(timer); reject(error); },
           });
           post({ type: 'getContent', id });
         }),
-        setContent: (content) => { post({ type: 'setContent', content }); },
-        markSaved: (token) => { post({ type: 'markSaved', token }); },
+        setContent: (content: string) => { post({ type: 'setContent', content }); },
+        markSaved: (token: unknown) => { post({ type: 'markSaved', token }); },
         focus: () => { post({ type: 'focus' }); },
       }), [post]);
 
@@ -518,7 +567,10 @@ window.__ModuleLoader__.load({
       });
     });
 
-    const TextEditor = React.forwardRef(function TextEditor({ initial, eol, onDirty, onSave }, ref) {
+    const TextEditor = React.forwardRef(function TextEditor(
+      { initial, eol, onDirty, onSave }: {
+        initial: string; eol: string; onDirty: (dirty: boolean) => void; onSave: () => void;
+      }, ref: any) {
       const area = React.useRef(null);
       const saved = React.useRef(toLf(initial));
       React.useImperativeHandle(ref, () => ({
@@ -526,13 +578,13 @@ window.__ModuleLoader__.load({
           const value = area.current.value;
           return { content: withEol(value, eol), token: value };
         },
-        setContent: (content) => {
+        setContent: (content: string) => {
           const value = toLf(content);
           area.current.value = value;
           saved.current = value;
           onDirty(false);
         },
-        markSaved: (token) => {
+        markSaved: (token: unknown) => {
           saved.current = token;
           onDirty(area.current.value !== saved.current);
         },
@@ -545,7 +597,7 @@ window.__ModuleLoader__.load({
         spellCheck: false,
         'aria-label': 'editor',
         onChange: () => { onDirty(area.current.value !== saved.current); },
-        onKeyDown: (event) => {
+        onKeyDown: (event: KeyboardEvent) => {
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
             event.preventDefault();
             onSave();
@@ -557,19 +609,19 @@ window.__ModuleLoader__.load({
     // ──────────────────────── dirty tracking store ────────────────────────
 
     /** Tab ids are only unique within a session's layout. */
-    const dirtyKey = (sessionId, tabId) => `${sessionId}\u0000${tabId}`;
+    const dirtyKey = (sessionId: string, tabId: string) => `${sessionId}\u0000${tabId}`;
 
     const dirtyTabs = {
-      ids: new Set(),
-      listeners: new Set(),
+      ids: new Set<string>(),
+      listeners: new Set<() => void>(),
       revision: 0,
-      set(id, dirty) {
+      set(id: string, dirty: boolean) {
         if (this.ids.has(id) === dirty) return;
         if (dirty) this.ids.add(id); else this.ids.delete(id);
         this.revision += 1;
         for (const listener of this.listeners) listener();
       },
-      subscribe: (listener) => {
+      subscribe: (listener: () => void) => {
         dirtyTabs.listeners.add(listener);
         return () => { dirtyTabs.listeners.delete(listener); };
       },
@@ -578,11 +630,50 @@ window.__ModuleLoader__.load({
 
     // ───────────────────────────── editor tab ─────────────────────────────
 
-    const LOAD_ERROR_KEYS = { tooLarge: 'editor.tooLarge', notText: 'editor.notText', gone: 'editor.gone', failed: 'editor.loadError' };
+    const LOAD_ERROR_KEYS: Record<string, string> = { tooLarge: 'editor.tooLarge', notText: 'editor.notText', gone: 'editor.gone', failed: 'editor.loadError' };
+
+    interface RemoteWorkspaceFiles {
+      readBytes(
+        sessionId: string,
+        path: string,
+        options: { range?: { offset: number; length: number } },
+        signal?: AbortSignal,
+      ): Promise<{ ok: true; value: { data: Uint8Array; eof: boolean; bytes?: number; version: string } }
+        | { ok: false; error?: { code?: string } }>;
+    }
+
+    /** What a tab pane's `useTabInfo()` reports for this plugin's tabs. */
+    interface ClientTab {
+      id: string;
+      contentId?: string;
+      title: string;
+      signal: AbortSignal;
+      actions: { bindCommands(commands: Record<string, () => void>): () => void };
+    }
+
+    interface EditorPaneProps {
+      useTabInfo(): { tab: ClientTab };
+      sessionId: string;
+    }
+
+    interface ClientTheme {
+      getTheme(): { active: { colorScheme?: string } };
+      subscribe(listener: () => void): () => void;
+    }
+
+    type LoadError = 'tooLarge' | 'notText' | 'gone' | 'failed';
+    type LoadedFile = { reason?: undefined; text: string; eol: string; version: string }
+      | { reason: LoadError };
+    type SaveState = { state: 'idle' | 'saving' | 'saved' | 'conflict' } | { state: 'error'; key: string };
 
     /** Read the whole file as bytes (not lines) so line endings and the trailing newline survive a save. */
-    async function readFile(remote, sessionId, path, signal) {
-      let result;
+    async function readFile(
+      remote: { workspaceFiles: RemoteWorkspaceFiles },
+      sessionId: string,
+      path: string,
+      signal: AbortSignal,
+    ): Promise<LoadedFile> {
+      let result: Awaited<ReturnType<RemoteWorkspaceFiles['readBytes']>>;
       try {
         result = await remote.workspaceFiles.readBytes(
           sessionId, path, { range: { offset: 0, length: MAX_EDIT_BYTES + 1 } }, signal);
@@ -602,7 +693,12 @@ window.__ModuleLoader__.load({
       return { text: decoded.text, eol: dominantEol(decoded.text), version };
     }
 
-    function EditorBody({ props, remote, theme, t }) {
+    function EditorBody({ props, remote, theme, t }: {
+      props: EditorPaneProps;
+      remote: { workspaceFiles: RemoteWorkspaceFiles };
+      theme: ClientTheme;
+      t: Translate;
+    }) {
       const { tab } = props.useTabInfo();
       const address = parseFileAddress(tab.contentId);
       const sessionId = address?.sessionId ?? props.sessionId;
@@ -619,10 +715,10 @@ window.__ModuleLoader__.load({
       const version = React.useRef('');
 
       const key = dirtyKey(props.sessionId, tab.id);
-      const setDirty = React.useCallback((value) => {
+      const setDirty = React.useCallback((value: boolean) => {
         setDirtyState(value);
         dirtyTabs.set(key, value);
-        if (value) setSave((current) => (current.state === 'saved' ? { state: 'idle' } : current));
+        if (value) setSave((current: SaveState) => (current.state === 'saved' ? { state: 'idle' } : current));
       }, [key]);
       React.useEffect(() => () => { dirtyTabs.set(key, false); }, [key]);
       React.useEffect(() => {
@@ -631,7 +727,7 @@ window.__ModuleLoader__.load({
         return theme.subscribe(sync);
       }, [theme]);
 
-      const load = React.useCallback(async () => {
+      const load = React.useCallback(async (): Promise<LoadedFile | undefined> => {
         const loaded = await readFile(remote, sessionId, path, tab.signal);
         if (tab.signal.aborted) return undefined;
         if (loaded.reason !== undefined) { setLoadError(loaded.reason); return undefined; }
@@ -642,7 +738,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         let alive = true;
         setLoadError(null);
-        load().then((loaded) => { if (alive && loaded !== undefined) setFile(loaded); });
+        load().then((loaded: LoadedFile | undefined) => { if (alive && loaded !== undefined) setFile(loaded); });
         return () => { alive = false; };
       }, [load]);
 
@@ -664,7 +760,7 @@ window.__ModuleLoader__.load({
         refresh: () => { if (confirmDiscard()) reload(); },
       }), [tab.actions, confirmDiscard, reload]);
 
-      const doSave = React.useCallback(async (force) => {
+      const doSave = React.useCallback(async (force: boolean) => {
         if (save.state === 'saving' || editor.current === null) return;
         setSave({ state: 'saving' });
         try {
@@ -700,9 +796,9 @@ window.__ModuleLoader__.load({
       }, [save.state, sessionId, path]);
 
       const onSave = React.useCallback(() => { doSave(false); }, [doSave]);
-      const onFrameFail = React.useCallback((reason) => {
+      const onFrameFail = React.useCallback((reason: unknown) => {
         console.warn('monaco unavailable, using plain text:', reason);
-        setEngine((current) => (current === 'monaco' ? 'text' : current));
+        setEngine((current: 'monaco' | 'text') => (current === 'monaco' ? 'text' : current));
       }, []);
 
       if (loadError !== null) {
@@ -717,7 +813,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dlf-ed-msg' }, t('editor.loading')));
       }
 
-      const status = save.state === 'saving' ? { text: t('editor.saving') }
+      const status: { text: string; tone?: string } | undefined = save.state === 'saving' ? { text: t('editor.saving') }
         : save.state === 'error' ? { text: t(save.key, { limit: formatBytes(MAX_EDIT_BYTES) }), tone: 'error' }
           : save.state === 'saved' && !dirty ? { text: t('editor.saved'), tone: 'ok' }
             : dirty ? { text: t('editor.unsaved') } : undefined;
@@ -749,9 +845,38 @@ window.__ModuleLoader__.load({
 
     // ───────────────────────────── plugin body ─────────────────────────────
 
+    /** The client context cordis assembles from the `inject` list below. */
+    interface ClientCtx {
+      effect(callback: () => unknown, label?: string): unknown;
+      slots: {
+        inject(name: string, factory: () => unknown): unknown;
+        register(registration: {
+          name: string; id?: string; key?: string; order?: number; priority?: number; locale?: string;
+        }, component: any): unknown;
+      };
+      locale: {
+        register(namespace: string, dictionaries: Record<string, Record<string, string>>): unknown;
+        bind(namespace: string): Translate;
+      };
+      sidebarRight: SidebarRight;
+      sidebarRightTabs: {
+        register(tabType: {
+          id: string;
+          kind: string;
+          priority: string;
+          keepMounted: boolean;
+          canOpen: (address: string) => boolean;
+          title: (address: string) => string;
+        }): unknown;
+      };
+      remote: { workspaceFiles: RemoteWorkspaceFiles };
+      theme: { getTheme(): { active: { colorScheme?: string } } };
+      on(event: 'theme/change', listener: () => void): () => void;
+    }
+
     return {
       inject: ['slots', 'locale', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'theme'],
-      apply(ctx) {
+      apply(ctx: ClientCtx) {
         ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'download-files: dictionaries');
         ctx.effect(() => {
           const style = document.createElement('style');
@@ -767,22 +892,22 @@ window.__ModuleLoader__.load({
         // Inside the Files tab a "Show files" button would be a no-op: render nothing.
         const HiddenInFilesTab = () => null;
 
-        const FileRouteDownload = (props) => {
+        const FileRouteDownload = (props: { actionUrl?: unknown }) => {
           const url = routeUrl(props.actionUrl);
           return url === undefined ? null : h(DownloadButton, { url, t });
         };
-        const PathActions = (props) => (typeof props.absolutePath === 'string'
+        const PathActions = (props: { sessionId?: unknown; absolutePath?: unknown }) => (typeof props.absolutePath === 'string'
           ? h(React.Fragment, null,
             h(EditButton, {
               sessionId: props.sessionId, absolutePath: props.absolutePath, sidebarRight: ctx.sidebarRight, t,
             }),
             h(DownloadButton, { url: pathUrl(props.absolutePath), t }))
           : null);
-        const PathDownloadProminent = (props) => (
+        const PathDownloadProminent = (props: { absolutePath?: unknown }) => (
           typeof props.absolutePath === 'string'
             ? h(DownloadButton, { url: pathUrl(props.absolutePath), large: true, t }) : null);
 
-        const slots = {
+        const slots: Record<string, (props: any) => any> = {
           'deliverables.file.actions': FileRouteDownload,
           'deliverables.review.file.actions': FileRouteDownload,
           'sidebar.right.tab.document.actions': PathActions,
@@ -809,15 +934,15 @@ window.__ModuleLoader__.load({
           priority: 'fallback',
           // An editor must keep its unsaved text while another tab is in front.
           keepMounted: true,
-          canOpen: (address) => parseFileAddress(address) !== undefined,
-          title: (address) => baseName(parseFileAddress(address)?.path ?? address),
+          canOpen: (address: string) => parseFileAddress(address) !== undefined,
+          title: (address: string) => baseName(parseFileAddress(address)?.path ?? address),
         }), 'download-files: editor tab type');
 
-        const theme = {
+        const theme: ClientTheme = {
           getTheme: () => ctx.theme.getTheme(),
-          subscribe: (listener) => ctx.on('theme/change', listener),
+          subscribe: (listener: () => void) => ctx.on('theme/change', listener),
         };
-        const Body = (props) => h(EditorBody, { props, remote: ctx.remote, theme, t });
+        const Body = (props: EditorPaneProps) => h(EditorBody, { props, remote: ctx.remote, theme, t });
         ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
           name: 'sidebar.right.pane.tab', key: EDITOR_ID, locale: NS,
         }, Body)), 'download-files: editor tab body');
@@ -825,11 +950,13 @@ window.__ModuleLoader__.load({
         // Same icon as the stock preview tab: FileTypeIcon + classifyFileType from the
         // shared primitives. If a future Harness stops exposing them, the tab simply
         // shows no icon rather than failing.
-        let primitives;
+        let primitives: any;
         try { primitives = require('@deepseek-ai/dsh-client-ui-primitives'); } catch { /* no icon */ }
         const FileTypeIcon = primitives?.FileTypeIcon;
         const classifyFileType = primitives?.classifyFileType;
-        const Title = ({ useTabInfo, sessionId }) => {
+        const Title = ({ useTabInfo, sessionId }: {
+          useTabInfo: () => { tab: ClientTab }; sessionId: string;
+        }) => {
           const { tab } = useTabInfo();
           React.useSyncExternalStore(dirtyTabs.subscribe, dirtyTabs.snapshot);
           const icon = FileTypeIcon && classifyFileType
@@ -852,7 +979,7 @@ window.__ModuleLoader__.load({
         }), 'download-files: editor close guard');
 
         ctx.effect(() => {
-          const guard = (event) => {
+          const guard = (event: BeforeUnloadEvent) => {
             if (dirtyTabs.ids.size === 0) return;
             event.preventDefault();
             event.returnValue = '';

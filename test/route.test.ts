@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handleDownload, contentDisposition, registerDownloadRoute, CHUNK_BYTES } from '../src/download-route.js';
+import { handleDownload, contentDisposition, registerDownloadRoute, CHUNK_BYTES } from '../src/download-route.ts';
+import type { DownloadContext, DownloadRegisterContext, FetchRoute } from '../src/context.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-'));
 const big = join(dir, 'big file é.bin');
@@ -15,30 +16,29 @@ mkdirSync(join(dir, 'sub'));
 function denied() { return Object.assign(new Error('denied'), { code: 'FS_SANDBOX_DENIED' }); }
 
 /** A fake Host context backed by the real filesystem. */
-function fakeCtx(extra = {}) {
-  const fs = {
-    processPathFromHostPath: (p) => (p.startsWith('/etc/') ? undefined : p),
-    async resolve(p) {
-      if (p.startsWith('/forbidden')) throw denied();
-      return { displayPath: p };
-    },
-    async stat(t) {
-      try {
-        const s = statSync(t.displayPath);
-        return { type: s.isFile() ? 'file' : 'directory', size: s.size };
-      } catch { return undefined; }
-    },
-    async readByteRange(t, { offset, length }) {
-      const fd = openSync(t.displayPath, 'r');
-      try {
-        const buf = Buffer.alloc(length);
-        const n = readSync(fd, buf, 0, length, offset);
-        return buf.subarray(0, n);
-      } finally { closeSync(fd); }
-    },
-  };
+function fakeCtx(): DownloadContext {
   return {
-    fs,
+    fs: {
+      processPathFromHostPath: (p: string) => (p.startsWith('/etc/') ? undefined : p),
+      async resolve(p: string) {
+        if (p.startsWith('/forbidden')) throw denied();
+        return { displayPath: p };
+      },
+      async stat(t) {
+        try {
+          const s = statSync(t.displayPath!);
+          return { type: s.isFile() ? 'file' : 'directory', size: s.size };
+        } catch { return undefined; }
+      },
+      async readByteRange(t, { offset, length }) {
+        const fd = openSync(t.displayPath!, 'r');
+        try {
+          const buf = Buffer.alloc(length);
+          const n = readSync(fd, buf, 0, length, offset);
+          return buf.subarray(0, n);
+        } finally { closeSync(fd); }
+      },
+    },
     sandboxPolicy: { workspaceRoot: dir },
     sessionQuery: {
       async readEvent() {
@@ -48,24 +48,23 @@ function fakeCtx(extra = {}) {
         };
       },
     },
-    workspaceFiles: { async stat(_scope, path) { return { absolutePath: join(dir, path) }; } },
+    workspaceFiles: { async stat(_scope: unknown, path: string) { return { absolutePath: join(dir, path) }; } },
     workspaceChanges: {
-      summary: (id, seq) => (seq === 1 ? { cwd: dir, files: [{ path: 'big file é.bin' }] } : undefined),
+      summary: (id: string, seq: number) => (seq === 1 ? { cwd: dir, files: [{ path: 'big file é.bin' }] } : undefined),
     },
-    ...extra,
   };
 }
 
-const get = (ctx, query, method = 'GET') =>
+const get = (ctx: DownloadContext, query: string, method = 'GET') =>
   handleDownload(ctx, new Request(`http://x/api/download.file?${query}`, { method }));
-const q = (o) => new URLSearchParams(o).toString();
+const q = (o: Record<string, string>) => new URLSearchParams(o).toString();
 
 test('streams a multi-chunk file by path with attachment headers', async () => {
   const res = await get(fakeCtx(), q({ path: big }));
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('content-length'), String(bigBytes.length));
   assert.equal(res.headers.get('content-type'), 'application/octet-stream');
-  assert.match(res.headers.get('content-disposition'), /^attachment; filename="big file _\.bin"; filename\*=UTF-8''big%20file%20%C3%A9\.bin$/);
+  assert.match(res.headers.get('content-disposition')!, /^attachment; filename="big file _\.bin"; filename\*=UTF-8''big%20file%20%C3%A9\.bin$/);
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), bigBytes);
 });
 
@@ -105,11 +104,13 @@ test('contentDisposition strips separators, quotes and control characters', () =
 });
 
 test('registerDownloadRoute registers GET/HEAD and disposes', async () => {
-  let route; let removed = false;
-  const ctx = fakeCtx({
+  let route: FetchRoute | undefined; let removed = false;
+  const ctx: DownloadRegisterContext = {
+    ...fakeCtx(),
     connection: { fetch: { register(r) { route = r; return () => { removed = true; }; } } },
-  });
+  };
   const dispose = registerDownloadRoute(ctx);
+  assert.ok(route);
   assert.equal(route.path, '/api/download.file');
   assert.deepEqual(route.methods, ['GET', 'HEAD']);
   const res = await route.fetch(new Request(`http://x/api/download.file?${q({ path: big })}`));
