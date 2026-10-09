@@ -1,8 +1,8 @@
-# @louisremi/dsh-docker-adapter
+# @louisremi/dsh-always-on
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that adapts the web UI for running the Harness inside a Docker container.
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin for running your Harness in a container, where it has **no access to your local file system**.
 
-When the Harness runs on a NAS, a server or in Docker, the stock "show file location" and "Open in app" buttons have no desktop to act on. This plugin replaces them with things that work through your browser:
+Run the Harness in a Docker container — on a NAS, a server, anywhere — and it lives on a machine of its own: the stock "show file location" and "Open in app" buttons would have to reach a desktop that isn't there, and nothing inside the container can read or write your computer's files. Your browser is the only connection between you and your files. This plugin makes it enough, replacing the dead buttons with things that work through it:
 
 - **Download file** buttons that save a file to your computer.
 - **Show files**, which opens the sidebar file explorer.
@@ -11,7 +11,7 @@ When the Harness runs on a NAS, a server or in Docker, the stock "show file loca
 ## Install
 
 ```sh
-dsh plugin --profile web add @louisremi/dsh-docker-adapter
+dsh plugin --profile web add @louisremi/dsh-always-on
 ```
 
 Use the name of the profile your Harness runs with. The plugin loads live; restart the Harness only if the command says a restart is required.
@@ -71,7 +71,7 @@ npm run test:e2e   # opt-in: real headless Chromium + real Monaco from the CDN (
 ## Uninstall
 
 ```sh
-dsh plugin --profile web remove @louisremi/dsh-docker-adapter
+dsh plugin --profile web remove @louisremi/dsh-always-on
 ```
 
 ## Releasing
@@ -81,7 +81,7 @@ Bump `version` in `package.json` (`npm version patch`), push, then publish a Git
 The maintainer then publishes the staged version with proof-of-presence:
 
 ```sh
-npm stage list @louisremi/dsh-docker-adapter
+npm stage list @louisremi/dsh-always-on
 npm stage approve <stage-id>
 ```
 

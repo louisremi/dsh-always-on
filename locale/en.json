@@ -1,1 +1,1 @@
-{ "meta": { "title": "Download Files", "description": "Replaces \"Show file location\" with \"Download file\" so files on a remote Harness host can be saved through the browser." } }
+{ "meta": { "title": "Always On", "description": "For running the Harness in a container, with no access to your local file system: download files, open the file explorer, and edit files in the sidebar, all through the browser." } }

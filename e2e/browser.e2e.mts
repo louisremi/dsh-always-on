@@ -70,12 +70,12 @@ const reg=(name,key)=>window.__regs.find(([o])=>o.name===name&&(key===undefined|
 const h=React.createElement;
 const info={tab:{id:'tab1',contentId:params.get('addr'),title:'x',signal:new AbortController().signal,actions:{bindCommands:()=>()=>{}}}};
 window.__mountTitles=(titles)=>{
-  const Title=reg('sidebar.right.pane.tab.title','@louisremi/dsh-docker-adapter/editor');
+  const Title=reg('sidebar.right.pane.tab.title','@louisremi/dsh-always-on/editor');
   ReactDOM.createRoot(document.getElementById('root')).render(h('div',null,...titles.map((title,i)=>h('div',{key:i,'data-title':title,style:{display:'flex',gap:6,alignItems:'center',height:24}},h(Title,{useTabInfo:()=>({tab:{id:'t'+i,title}}),sessionId:'sess'})))));
 };
 window.__mount=(what)=>{
   const root=ReactDOM.createRoot(document.getElementById('root'));
-  if(what==='editor') root.render(h(reg('sidebar.right.pane.tab',Object.keys({})[0]||'@louisremi/dsh-docker-adapter/editor'),{useTabInfo:()=>info,sessionId:'sess'}));
+  if(what==='editor') root.render(h(reg('sidebar.right.pane.tab',Object.keys({})[0]||'@louisremi/dsh-always-on/editor'),{useTabInfo:()=>info,sessionId:'sess'}));
   else root.render(h(reg('sidebar.right.tab.document.actions'),{sessionId:'sess',absolutePath:params.get('abs')}));
 };
 if(params.get('what')==='titles')window.__mountTitles((params.get('t')||'').split('|'));else window.__mount(params.get('what'));

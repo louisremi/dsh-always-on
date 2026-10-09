@@ -1,6 +1,7 @@
 /**
- * Client half of dsh-docker-adapter, for a Harness running on a remote host
- * (NAS, Docker, server) where native "open in app" actions cannot work.
+ * Client half of dsh-always-on, for a Harness running in a container or on a
+ * remote host (NAS, Docker, server) with no access to your local file system,
+ * where native "open in app" actions cannot work.
  *
  *  - "Download file" replaces the stock "Show file location" buttons.
  *  - "Show files" replaces the stock directory "Open in app" control and
@@ -43,18 +44,18 @@ interface Window {
 }
 
 window.__ModuleLoader__.load({
-  id: '@louisremi/dsh-docker-adapter',
+  id: '@louisremi/dsh-always-on',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
 
-    const NS = 'download-files';
+    const NS = 'always-on';
     const ROUTE = 'api/download.file';
     const SAVE_ROUTE = 'api/save.file';
     const STOCK_ID = 'open-in-app';
     const ERROR_MS = 4000;
 
-    const EDITOR_ID = '@louisremi/dsh-docker-adapter/editor';
+    const EDITOR_ID = '@louisremi/dsh-always-on/editor';
     const EDITOR_KIND = 'dlf-editor';
     /** Largest file the editor opens; keep in step with MAX_SAVE_BYTES in src/save-route.ts. */
     const MAX_EDIT_BYTES = 1024 * 1024;
@@ -877,14 +878,14 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.workspaceFiles', 'theme'],
       apply(ctx: ClientCtx) {
-        ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'download-files: dictionaries');
+        ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'always-on: dictionaries');
         ctx.effect(() => {
           const style = document.createElement('style');
-          style.dataset.plugin = 'dsh-docker-adapter';
+          style.dataset.plugin = 'dsh-always-on';
           style.textContent = CSS;
           document.head.appendChild(style);
           return () => { style.remove(); };
-        }, 'download-files: styles');
+        }, 'always-on: styles');
         const t = ctx.locale.bind(NS);
 
         // ── download + show files ──
@@ -936,7 +937,7 @@ window.__ModuleLoader__.load({
           keepMounted: true,
           canOpen: (address: string) => parseFileAddress(address) !== undefined,
           title: (address: string) => baseName(parseFileAddress(address)?.path ?? address),
-        }), 'download-files: editor tab type');
+        }), 'always-on: editor tab type');
 
         const theme: ClientTheme = {
           getTheme: () => ctx.theme.getTheme(),
@@ -945,7 +946,7 @@ window.__ModuleLoader__.load({
         const Body = (props: EditorPaneProps) => h(EditorBody, { props, remote: ctx.remote, theme, t });
         ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
           name: 'sidebar.right.pane.tab', key: EDITOR_ID, locale: NS,
-        }, Body)), 'download-files: editor tab body');
+        }, Body)), 'always-on: editor tab body');
 
         // Same icon as the stock preview tab: FileTypeIcon + classifyFileType from the
         // shared primitives. If a future Harness stops exposing them, the tab simply
@@ -966,7 +967,7 @@ window.__ModuleLoader__.load({
         };
         ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab.title', () => ctx.slots.register({
           name: 'sidebar.right.pane.tab.title', key: EDITOR_ID,
-        }, Title)), 'download-files: editor tab title');
+        }, Title)), 'always-on: editor tab title');
 
         // Closing a tab with unsaved text asks first; throwing keeps the tab open.
         ctx.effect(() => ctx.sidebarRight.registerCloseHandler(EDITOR_KIND, (sessionId, tab) => {
@@ -976,7 +977,7 @@ window.__ModuleLoader__.load({
             throw new Error('close cancelled: unsaved changes');
           }
           dirtyTabs.set(key, false);
-        }), 'download-files: editor close guard');
+        }), 'always-on: editor close guard');
 
         ctx.effect(() => {
           const guard = (event: BeforeUnloadEvent) => {
@@ -986,7 +987,7 @@ window.__ModuleLoader__.load({
           };
           window.addEventListener('beforeunload', guard);
           return () => { window.removeEventListener('beforeunload', guard); };
-        }, 'download-files: unload guard');
+        }, 'always-on: unload guard');
       },
     };
   },

@@ -1,26 +1,28 @@
 {
-  "name": "@louisremi/dsh-docker-adapter",
+  "name": "@louisremi/dsh-always-on",
   "version": "0.3.0",
-  "description": "DeepSeek Harness plugin for Harnesses running on a remote host (NAS, Docker, server): download buttons instead of \"Show file location\", a \"Show files\" shortcut, and an in-sidebar Monaco file editor.",
+  "description": "DeepSeek Harness plugin for harnesses running in a container, with no access to your local file system: download buttons instead of \"Show file location\", a \"Show files\" shortcut, and an in-sidebar Monaco file editor, all through the browser.",
   "keywords": [
     "deepseek-harness",
+    "container",
     "docker",
     "download",
     "dsh",
     "dsh-plugin",
     "editor",
-    "monaco"
+    "monaco",
+    "remote"
   ],
   "license": "MIT",
   "author": "louisremi",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/louisremi/dsh-docker-adapter.git"
+    "url": "git+https://github.com/louisremi/dsh-always-on.git"
   },
   "bugs": {
-    "url": "https://github.com/louisremi/dsh-docker-adapter/issues"
+    "url": "https://github.com/louisremi/dsh-always-on/issues"
   },
-  "homepage": "https://github.com/louisremi/dsh-docker-adapter#readme",
+  "homepage": "https://github.com/louisremi/dsh-always-on#readme",
   "type": "module",
   "icon": "./src/assets/icon.svg",
   "exports": {

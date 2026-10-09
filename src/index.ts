@@ -47,6 +47,6 @@ export interface PluginContext {
  * editor.
  */
 export function apply(ctx: PluginContext): void {
-  ctx.effect(() => registerDownloadRoute(ctx), 'download-files: /api/download.file');
-  ctx.effect(() => registerSaveRoute(ctx), 'download-files: /api/save.file');
+  ctx.effect(() => registerDownloadRoute(ctx), 'always-on: /api/download.file');
+  ctx.effect(() => registerSaveRoute(ctx), 'always-on: /api/save.file');
 }
