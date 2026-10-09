@@ -80,7 +80,7 @@ Changes land on `main` as pull requests, so each GitHub Release can describe its
 
 1. Bump `version` in `package.json` and push (via PR).
 2. Publish a GitHub Release whose tag matches the version: `gh release create vX.Y.Z`.
-3. The **Publish to npm** workflow then runs on release publish: it checks the tag against `package.json`, lints, type-checks, tests, and publishes to npm with provenance through [trusted publishing](https://docs.npmjs.com/trusted-publishers) — no tokens stored in the repo.
+3. The **Publish to npm** workflow then runs on release publish: it checks the tag against `package.json`, lints, type-checks, tests, and publishes to npm with provenance through [trusted publishing](https://docs.npmjs.com/trusted-publishers) — no tokens stored in the repo. If the version is already in the registry (the very first publish of a package has to be done manually, since trusted publishing is configured on the package page), the workflow skips the publish.
 
 ## License
 
