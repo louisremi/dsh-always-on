@@ -4,10 +4,12 @@ name: Release notes
 # release notes (everything merged since the previous release). The repo
 # lands changes as pull requests so the generator has content to work with;
 # `.github/release.yml` controls the categorization.
+# `created` covers releases published right away; `published` covers drafts,
+# which Actions does not trigger `created` for.
 
 on:
   release:
-    types: [created]
+    types: [created, published]
 
 permissions:
   contents: write
@@ -15,6 +17,11 @@ permissions:
 jobs:
   notes:
     runs-on: ubuntu-latest
+    # A non-draft release fires both triggers at once; run them one at a
+    # time so the second one sees the description the first one wrote.
+    concurrency:
+      group: release-notes-${{ github.event.release.tag_name }}
+      cancel-in-progress: false
     steps:
       - name: Generate the release description
         env:
