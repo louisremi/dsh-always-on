@@ -3,6 +3,10 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  # Manual retry: run this workflow against a `vX.Y.Z` tag after fixing
+  # whatever made the automatic run fail. Dispatching from anything else
+  # trips the tag/version check below.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,7 +23,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: Release tag must match package.json version
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
         run: |
           version="$(node -p "require('./package.json').version")"
           if [ "${TAG#v}" != "$version" ]; then
