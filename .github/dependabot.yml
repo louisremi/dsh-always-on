@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    # Dev-dep bumps change nothing consumers install (zero runtime deps),
+    # so keep them out of the auto-generated release notes, which
+    # .github/release.yml already filters on this label.
+    labels:
+      - skip-changelog
+    groups:
+      dev-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
