@@ -26,7 +26,7 @@ const REACT_UMD = process.env.REACT_UMD ?? require.resolve('react/umd/react.deve
 const REACT_DOM_UMD =
   process.env.REACT_DOM_UMD ?? require.resolve('react-dom/umd/react-dom.development.js');
 const { handleSave } = await import('../src/save-route.ts');
-const { handleCreateFile } = await import('../src/create-route.ts');
+const { handleCreateFile, handleCreateFolder } = await import('../src/create-route.ts');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
 const versionOf = (p: string) => {
@@ -109,7 +109,7 @@ window.__mountTitles=(titles)=>{
 window.__mount=(what)=>{
   const root=ReactDOM.createRoot(document.getElementById('root'));
   if(what==='editor') root.render(h(reg('sidebar.right.pane.tab',Object.keys({})[0]||'@louisremi/dsh-always-on/editor'),{useTabInfo:()=>info,sessionId:'sess'}));
-  else if(what==='newfile') root.render(h(reg('sidebar.right.tab.files.actions',undefined,'@louisremi/dsh-always-on/editor/new-file'),{sessionId:'sess',absolutePath:params.get('abs')}));
+  else if(what==='newfile'||what==='newfolder') root.render(h(reg('sidebar.right.tab.files.actions',undefined,'@louisremi/dsh-always-on/editor/new-'+what.slice(3)),{sessionId:'sess',absolutePath:params.get('abs')}));
   else root.render(h(reg('sidebar.right.tab.document.actions'),{sessionId:'sess',absolutePath:params.get('abs')}));
 };
 if(params.get('what')==='titles')window.__mountTitles((params.get('t')||'').split('|'));else window.__mount(params.get('what'));
@@ -168,15 +168,16 @@ const server = http.createServer(async (req, res) => {
       return send(404, 'nope');
     }
   }
-  if (url.pathname === '/api/create.file') {
+  if (url.pathname === '/api/create.file' || url.pathname === '/api/create.folder') {
     const body = await new Promise<Buffer>((r) => {
       const c: Buffer[] = [];
       req.on('data', (d) => c.push(d));
       req.on('end', () => r(Buffer.concat(c)));
     });
-    const out = await handleCreateFile(
+    const handle = url.pathname === '/api/create.file' ? handleCreateFile : handleCreateFolder;
+    const out = await handle(
       hostCtx,
-      new Request('http://x/api/create.file', { method: 'POST', body: new Uint8Array(body) }),
+      new Request(`http://x${url.pathname}`, { method: 'POST', body: new Uint8Array(body) }),
     );
     return send(out.status, await out.text(), 'application/json');
   }
@@ -378,6 +379,27 @@ await check(
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
     assert.throws(() => readFileSync(join(dir, 'never.txt')));
+  },
+);
+
+await check(
+  'New folder: creates nested folders, refuses existing names, opens no editor',
+  async (page) => {
+    await page.goto(`${base}/?what=newfolder&abs=${encodeURIComponent(dir)}`);
+    await page.click('[data-new-folder]');
+    await page.fill('[data-dlf-dialog] input', 'docs/drafts');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.ok(statSync(join(dir, 'docs/drafts')).isDirectory());
+    assert.deepEqual(await page.evaluate(() => (window as any).__opened), []);
+    await page.click('[data-new-folder]');
+    await page.fill('[data-dlf-dialog] input', 'docs');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() =>
+      /create\.exists/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
   },
 );
 

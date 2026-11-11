@@ -1,3 +1,4 @@
+import { mkdir } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import type { SaveContext, SaveRegisterContext } from './context.ts';
 import { failureStatus } from './download-route.ts';
@@ -5,6 +6,7 @@ import { assertWritable } from './fence.ts';
 import { policyFor } from './session-policy.ts';
 
 export const CREATE_FILE_PATH = '/api/create.file';
+export const CREATE_FOLDER_PATH = '/api/create.folder';
 /** Longest name (with any sub-directories) a create accepts. */
 export const MAX_NAME_LENGTH = 1024;
 
@@ -100,6 +102,44 @@ export async function handleCreateFile(ctx: SaveContext, request: Request): Prom
     });
   } catch (error) {
     if (request.signal.aborted) return fail(499, 'cancelled');
+    return fail(failureStatus(error));
+  }
+}
+
+/**
+ * Handle POST /api/create.folder: create a directory (and missing parents) in
+ * a directory the session may write to. `ctx.fs` has no mkdir, so this is a
+ * plain `mkdir` on the Host path, guarded by the plugin's write fence
+ * (src/fence.ts), which re-canonicalizes the path through symlinks right
+ * before the call. An existing entry of any kind at the final name is a 409.
+ * Only possible when the Harness filesystem is the Host's own (a verified
+ * Host mapping), which is also what downloads require.
+ */
+export async function handleCreateFolder(ctx: SaveContext, request: Request): Promise<Response> {
+  if (request.method !== 'POST') return fail(405, 'POST only');
+  try {
+    const input = await parseCreate(request);
+    if (input instanceof Response) return input;
+    const { signal } = request;
+    const policy = await policyFor(ctx, input.sessionId, signal);
+    if (policy === undefined) return fail(404, 'session not found');
+
+    const hostPath = join(input.directory, ...input.segments);
+    const processPath = ctx.fs.processPathFromHostPath(hostPath);
+    if (processPath === undefined) return fail(422, 'path has no verified Host path');
+    // The fence checks the canonical path (symlinked ancestors resolved), and
+    // the same Host path is created right after: no other path is touched.
+    await assertWritable(policy, hostPath, { root: false });
+    signal.throwIfAborted();
+    const parent = join(hostPath, '..');
+    await mkdir(parent, { recursive: true });
+    // Non-recursive for the final name: EEXIST for anything already there.
+    await mkdir(hostPath);
+    return json(201, { absolutePath: hostPath });
+  } catch (error) {
+    if (request.signal.aborted) return fail(499, 'cancelled');
+    if ((error as { code?: string }).code === 'EEXIST') return fail(409);
+    if ((error as { code?: string }).code === 'EACCES') return fail(403);
     return fail(failureStatus(error));
   }
 }

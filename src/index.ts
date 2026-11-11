@@ -9,7 +9,13 @@ import type {
   SessionQueryService,
   WorkspaceFilesService,
 } from './context.ts';
-import { CREATE_FILE_PATH, handleCreateFile, registerPostRoute } from './create-route.ts';
+import {
+  CREATE_FILE_PATH,
+  CREATE_FOLDER_PATH,
+  handleCreateFile,
+  handleCreateFolder,
+  registerPostRoute,
+} from './create-route.ts';
 import { registerDownloadRoute } from './download-route.ts';
 import { registerSaveRoute } from './save-route.ts';
 
@@ -43,8 +49,8 @@ export interface PluginContext {
 
 /**
  * Host half: serves authenticated file downloads at /api/download.file,
- * guarded text saves at /api/save.file and new empty files at
- * /api/create.file. The Client half (src/client.ts) swaps
+ * guarded text saves at /api/save.file, and new empty files and folders
+ * at /api/create.file and /api/create.folder. The Client half (src/client.ts) swaps
  * the "Show file location" buttons for download buttons and adds the sidebar
  * editor.
  */
@@ -54,5 +60,9 @@ export function apply(ctx: PluginContext): void {
   ctx.effect(
     () => registerPostRoute(ctx, CREATE_FILE_PATH, handleCreateFile),
     'always-on: /api/create.file',
+  );
+  ctx.effect(
+    () => registerPostRoute(ctx, CREATE_FOLDER_PATH, handleCreateFolder),
+    'always-on: /api/create.folder',
   );
 }

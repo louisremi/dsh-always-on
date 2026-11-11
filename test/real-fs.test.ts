@@ -9,12 +9,14 @@
  */
 import assert from 'node:assert/strict';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -25,7 +27,7 @@ import { Context } from '@deepseek-ai/cordis';
 import { WorkspaceFiles } from '@deepseek-ai/dsh-api-workspace-files';
 import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox';
 import type { DownloadContext, LiveSession, SaveContext } from '../src/context.ts';
-import { handleCreateFile } from '../src/create-route.ts';
+import { handleCreateFile, handleCreateFolder } from '../src/create-route.ts';
 import { handleDownload } from '../src/download-route.ts';
 import { canonicalPath, mayWrite } from '../src/fence.ts';
 import { handleSave } from '../src/save-route.ts';
@@ -276,6 +278,55 @@ test('create.file rejects invalid names and bodies', async () => {
   assert.equal((await create(host.save, { name: 'x', directory: 'relative' })).status, 400);
   assert.equal((await create(host.save, { name: 'x', sessionId: '' })).status, 400);
   assert.equal((await create(host.save, { name: 'x', sessionId: 'nope' })).status, 404);
+});
+
+// ─────────────────────────── create folder ───────────────────────────
+
+const createFolder = (ctx: SaveContext, body: Record<string, unknown>) =>
+  handleCreateFolder(
+    ctx,
+    new Request('http://x/api/create.folder', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 'sess', directory: workspace, ...body }),
+    }),
+  );
+const isDir = (path: string) => existsSync(path) && statSync(path).isDirectory();
+
+test('create.folder makes a folder, and missing parents', async () => {
+  const host = realHost();
+  const res = await createFolder(host.save, { name: 'folder' });
+  assert.equal(res.status, 201);
+  assert.equal((await res.json()).absolutePath, join(workspace, 'folder'));
+  assert.ok(isDir(join(workspace, 'folder')));
+  assert.equal((await createFolder(host.save, { name: 'a/b/c' })).status, 201);
+  assert.ok(isDir(join(workspace, 'a/b/c')));
+});
+
+test('create.folder never replaces an existing file, folder or symlink', async () => {
+  const host = realHost();
+  writeFileSync(join(workspace, 'plain.txt'), 'keep');
+  assert.equal((await createFolder(host.save, { name: 'plain.txt' })).status, 409);
+  assert.equal(readFileSync(join(workspace, 'plain.txt'), 'utf8'), 'keep');
+  assert.equal((await createFolder(host.save, { name: 'sub' })).status, 409);
+  assert.equal((await createFolder(host.save, { name: 'escape-dir' })).status, 409);
+});
+
+test('create.folder follows the sandbox and rejects bad names', async () => {
+  assert.equal((await createFolder(realHost('read-only').save, { name: 'ro' })).status, 403);
+  assert.ok(!existsSync(join(workspace, 'ro')));
+  const host = realHost();
+  assert.equal((await createFolder(host.save, { directory: outside, name: 'o' })).status, 403);
+  assert.equal((await createFolder(host.save, { name: 'escape-dir/o' })).status, 403);
+  assert.equal((await createFolder(host.save, { name: 'escape-dir/x/y' })).status, 403);
+  assert.ok(!existsSync(join(outside, 'o')) && !existsSync(join(outside, 'x')));
+  for (const name of ['', '..', 'a/../b', '/abs', 'a\\b']) {
+    assert.equal((await createFolder(host.save, { name })).status, 400, JSON.stringify(name));
+  }
+  const full = await createFolder(realHost('danger-full-access').save, {
+    directory: outside,
+    name: 'full-dir',
+  });
+  assert.equal(full.status, 201);
 });
 
 test('fence: canonical paths and the narrow workspace-only grant', async () => {

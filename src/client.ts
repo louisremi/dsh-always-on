@@ -54,6 +54,7 @@ window.__ModuleLoader__.load({
     const ROUTE = 'api/download.file';
     const SAVE_ROUTE = 'api/save.file';
     const CREATE_FILE_ROUTE = 'api/create.file';
+    const CREATE_FOLDER_ROUTE = 'api/create.folder';
     const STOCK_ID = 'open-in-app';
     const ERROR_MS = 4000;
 
@@ -108,11 +109,13 @@ window.__ModuleLoader__.load({
       'editor.retry': 'Try again',
       'create.file': 'New file',
       'create.fileHint': 'Use / to create it in a new folder, e.g. notes/todo.md',
+      'create.folder': 'New folder',
+      'create.folderHint': 'Use / to create nested folders, e.g. docs/drafts',
       'create.create': 'Create',
       'create.cancel': 'Cancel',
       'create.exists': 'Something with that name already exists here.',
       'create.invalid': 'Enter a name without \\, control characters, or . and .. parts.',
-      'create.denied': "Creating files here is not permitted in this session's sandbox mode.",
+      'create.denied': "This is not permitted in this session's sandbox mode.",
       'create.failed': 'Could not create it. Try again.',
     };
     const zh = {
@@ -141,11 +144,13 @@ window.__ModuleLoader__.load({
       'editor.retry': '重试',
       'create.file': '新建文件',
       'create.fileHint': '可用 / 在新文件夹中创建，例如 notes/todo.md',
+      'create.folder': '新建文件夹',
+      'create.folderHint': '可用 / 创建多级文件夹，例如 docs/drafts',
       'create.create': '创建',
       'create.cancel': '取消',
       'create.exists': '此处已存在同名项目。',
       'create.invalid': '名称不能包含 \\、控制字符，或 . 和 .. 路径段。',
-      'create.denied': '当前会话的沙箱模式不允许在此处创建文件。',
+      'create.denied': '当前会话的沙箱模式不允许此操作。',
       'create.failed': '无法创建，请重试。',
     };
 
@@ -250,6 +255,18 @@ window.__ModuleLoader__.load({
         }),
         h('path', { d: 'M9 1.5V6H13.5', stroke: 'currentColor' }),
         h('path', { d: 'M8 8.5V12.5M6 10.5H10', stroke: 'currentColor' }),
+      );
+    }
+
+    function NewFolderIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', {
+          d: 'M1.5 3.5C1.5 2.948 1.948 2.5 2.5 2.5H6L7.5 4.25H13.5C14.052 4.25 14.5 4.698 14.5 5.25V12.5C14.5 13.052 14.052 13.5 13.5 13.5H2.5C1.948 13.5 1.5 13.052 1.5 12.5V3.5Z',
+          stroke: 'currentColor',
+        }),
+        h('path', { d: 'M8 6.5V11M5.75 8.75H10.25', stroke: 'currentColor' }),
       );
     }
 
@@ -642,13 +659,18 @@ window.__ModuleLoader__.load({
       return ReactDOM?.createPortal ? ReactDOM.createPortal(dialog, document.body) : dialog;
     }
 
-    /** "New file" in the Files tab toolbar: creates an empty file and opens it in the editor. */
-    function NewFileButton({
+    /**
+     * "New file" / "New folder" in the Files tab toolbar. A new file opens in
+     * the editor; a new folder simply appears in the tree (it watches the disk).
+     */
+    function CreateButton({
+      kind,
       sessionId,
       absolutePath,
       sidebarRight,
       t,
     }: {
+      kind: 'file' | 'folder';
       sessionId?: unknown;
       absolutePath?: unknown;
       sidebarRight: SidebarRight;
@@ -656,7 +678,7 @@ window.__ModuleLoader__.load({
     }) {
       const [open, setOpen] = React.useState(false);
       if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
-      const label = t('create.file');
+      const label = t(kind === 'file' ? 'create.file' : 'create.folder');
       return h(
         React.Fragment,
         null,
@@ -667,33 +689,38 @@ window.__ModuleLoader__.load({
             className: 'dlf-tool',
             title: label,
             'aria-label': label,
-            'data-new-file': '',
+            [kind === 'file' ? 'data-new-file' : 'data-new-folder']: '',
             onClick: () => setOpen(true),
           },
-          h(NewFileIcon, { size: 16 }),
+          h(kind === 'file' ? NewFileIcon : NewFolderIcon, { size: 16 }),
         ),
         open &&
           h(NameDialog, {
             title: label,
             where: absolutePath,
-            hint: t('create.fileHint'),
+            hint: t(kind === 'file' ? 'create.fileHint' : 'create.folderHint'),
             initial: '',
             confirm: t('create.create'),
             t,
             onClose: () => setOpen(false),
             submit: async (name: string) => {
-              const res = await postJson(CREATE_FILE_ROUTE, {
-                sessionId,
-                directory: absolutePath,
-                name,
-              });
+              const res = await postJson(
+                kind === 'file' ? CREATE_FILE_ROUTE : CREATE_FOLDER_ROUTE,
+                {
+                  sessionId,
+                  directory: absolutePath,
+                  name,
+                },
+              );
               if (!res.ok) return mutationErrorKey(res.status);
-              try {
-                sidebarRight.openResource(sessionFileAddress(sessionId, res.body.absolutePath), {
-                  kind: EDITOR_KIND,
-                });
-              } catch (error) {
-                console.warn('open new file rejected:', error);
+              if (kind === 'file') {
+                try {
+                  sidebarRight.openResource(sessionFileAddress(sessionId, res.body.absolutePath), {
+                    kind: EDITOR_KIND,
+                  });
+                } catch (error) {
+                  console.warn('open new file rejected:', error);
+                }
               }
               return undefined;
             },
@@ -1521,7 +1548,9 @@ window.__ModuleLoader__.load({
         // Inside the Files tab a "Show files" button would be a no-op: render nothing.
         const HiddenInFilesTab = () => null;
         const FilesTabNewFile = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
-          h(NewFileButton, { ...props, sidebarRight: ctx.sidebarRight, t });
+          h(CreateButton, { ...props, kind: 'file', sidebarRight: ctx.sidebarRight, t });
+        const FilesTabNewFolder = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
+          h(CreateButton, { ...props, kind: 'folder', sidebarRight: ctx.sidebarRight, t });
 
         const FileRouteDownload = (props: { actionUrl?: unknown }) => {
           const url = routeUrl(props.actionUrl);
@@ -1597,6 +1626,17 @@ window.__ModuleLoader__.load({
               locale: NS,
             },
             FilesTabNewFile,
+          ),
+        );
+        ctx.slots.inject('sidebar.right.tab.files.actions', () =>
+          ctx.slots.register(
+            {
+              name: 'sidebar.right.tab.files.actions',
+              id: `${EDITOR_ID}/new-folder`,
+              order: 11,
+              locale: NS,
+            },
+            FilesTabNewFolder,
           ),
         );
 
