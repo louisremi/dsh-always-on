@@ -9,7 +9,20 @@ import type {
   SessionQueryService,
   WorkspaceFilesService,
 } from './context.ts';
+import {
+  CREATE_FILE_PATH,
+  CREATE_FOLDER_PATH,
+  handleCreateFile,
+  handleCreateFolder,
+  registerPostRoute,
+} from './create-route.ts';
 import { registerDownloadRoute } from './download-route.ts';
+import {
+  DELETE_FILE_PATH,
+  handleDeleteFile,
+  handleRenameFile,
+  RENAME_FILE_PATH,
+} from './entry-route.ts';
 import { registerSaveRoute } from './save-route.ts';
 
 /** Services the download route needs: auth fence, filesystem, session lookups. */
@@ -41,12 +54,30 @@ export interface PluginContext {
 }
 
 /**
- * Host half: serves authenticated file downloads at /api/download.file and
- * guarded text saves at /api/save.file. The Client half (src/client.ts) swaps
+ * Host half: serves authenticated file downloads at /api/download.file,
+ * guarded text saves at /api/save.file, new empty files and folders
+ * at /api/create.file and /api/create.folder, and file rename/move and delete
+ * at /api/rename.file and /api/delete.file. The Client half (src/client.ts) swaps
  * the "Show file location" buttons for download buttons and adds the sidebar
  * editor.
  */
 export function apply(ctx: PluginContext): void {
   ctx.effect(() => registerDownloadRoute(ctx), 'always-on: /api/download.file');
   ctx.effect(() => registerSaveRoute(ctx), 'always-on: /api/save.file');
+  ctx.effect(
+    () => registerPostRoute(ctx, CREATE_FILE_PATH, handleCreateFile),
+    'always-on: /api/create.file',
+  );
+  ctx.effect(
+    () => registerPostRoute(ctx, CREATE_FOLDER_PATH, handleCreateFolder),
+    'always-on: /api/create.folder',
+  );
+  ctx.effect(
+    () => registerPostRoute(ctx, RENAME_FILE_PATH, handleRenameFile),
+    'always-on: /api/rename.file',
+  );
+  ctx.effect(
+    () => registerPostRoute(ctx, DELETE_FILE_PATH, handleDeleteFile),
+    'always-on: /api/delete.file',
+  );
 }

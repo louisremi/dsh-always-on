@@ -6,6 +6,7 @@ Run the Harness in a Docker container — on a NAS, a server, anywhere — and i
 
 - **Download file** buttons that save a file to your computer.
 - **Show files**, which opens the sidebar file explorer.
+- **New file** and **New folder**, in the Files tab, and **Rename/move** and **Delete** for the file you are previewing.
 - **Edit**, which opens a text file in an in-sidebar code editor ([Monaco](https://microsoft.github.io/monaco-editor/), the editor behind VS Code) and saves it back to the Harness host.
 
 ## Install
@@ -26,6 +27,17 @@ Nothing to configure.
 
 **Show files.** The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
 
+**New file.** In the sidebar's Files tab, the new-file button (next to Reload) asks for a name and creates an empty file in the folder the tab shows, then opens it in the editor. Type `notes/todo.md` to create missing folders on the way. It never overwrites anything: if the name is taken, it says so. It follows the session's sandbox mode like saving does, and is stricter in one way: in workspace-write mode it only creates inside the workspace (and any extra writable directories), never in temp areas.
+
+**New folder.** The button next to New file creates a folder (`docs/drafts` creates both levels) in the folder the Files tab shows. Same rules: it never replaces anything and follows the sandbox mode. Since the Harness filesystem layer has no "make directory" operation, the plugin calls `mkdir` itself, after the same sandbox check. That is only possible when the Harness files live on the Harness host, which is also what downloads need.
+
+**Rename / move and Delete.** A file open in the sidebar preview gets two more buttons next to Download:
+
+- **Rename or move** asks for a new name, with the stem pre-selected. A plain name renames in place, `folder/name` moves it into a (possibly new) sub-folder, and an absolute path moves it there. It never replaces an existing file: if the name is taken, it says so. Tabs showing the old name are closed and the file reopens under its new name.
+- **Delete** asks for confirmation, deletes the file and closes its tabs. There is no undo.
+- Both are refused while an editor tab has unsaved changes to that file, and both follow the sandbox mode like New folder.
+- They only act on regular files. Symlinks are refused, not followed. Folders cannot be renamed or deleted from the UI yet.
+
 **Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
 
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
@@ -38,7 +50,7 @@ Nothing to configure.
 
 ## How it works
 
-The plugin adds two authenticated routes to the Harness, `GET /api/download.file` and `POST /api/save.file`, and registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check.
+The plugin adds authenticated routes to the Harness, `GET /api/download.file`, `POST /api/save.file`, `POST /api/create.file`, `POST /api/create.folder`, `POST /api/rename.file` and `POST /api/delete.file`, and registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check.
 
 ### The editor and the CDN
 
@@ -67,6 +79,7 @@ Found a security problem? Please [open an issue](https://github.com/louisremi/ds
 ## Limitations
 
 - Download: single files only; folders are not downloadable.
+- Rename and delete: single files only; folders cannot be renamed or deleted from the UI.
 - Edit: text files up to 1 MiB; no multi-user locking beyond the on-disk version check.
 - Tested with DSH `0.2.0-rc.2`. It depends on the stock `open-in-app` and `sidebar-right` plugins' slot names and public API.
 
@@ -78,7 +91,7 @@ The source is TypeScript; `npm run build` compiles it to `dist/` (it also runs a
 npm ci
 npm run check      # TypeScript typecheck of src, tests and e2e
 npm run build      # compile src/ to dist/
-npm test           # host route unit tests (no browser needed)
+npm test           # host route tests, incl. the real Harness fs + sandbox stack (no browser needed)
 npm run test:e2e   # opt-in: real headless Chromium + real Monaco from the CDN (builds first)
 ```
 
