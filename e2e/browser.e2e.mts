@@ -478,20 +478,23 @@ await check(
     await page.click('textarea.dlf-ed-text');
     await page.keyboard.type('x');
     await page.waitForFunction(() => document.querySelector('.dlf-ed-dot'));
-    await page.evaluate(([a, path]: string[]) => {
-      (window as any).__tabs = [{ id: 'tab1', kind: 'dlf-editor', contentId: a }];
-      const host = document.createElement('div');
-      host.id = 'actions';
-      document.body.appendChild(host);
-      (window as any).ReactDOM.createRoot(host).render(
-        (window as any).React.createElement(
-          (window as any).__regs.find(
-            ([o]: any) => o.name === 'sidebar.right.tab.document.actions',
-          )[1],
-          { sessionId: 'sess', absolutePath: path },
-        ),
-      );
-    }, [fileAddr(f), f]);
+    await page.evaluate(
+      ([a, path]: string[]) => {
+        (window as any).__tabs = [{ id: 'tab1', kind: 'dlf-editor', contentId: a }];
+        const host = document.createElement('div');
+        host.id = 'actions';
+        document.body.appendChild(host);
+        (window as any).ReactDOM.createRoot(host).render(
+          (window as any).React.createElement(
+            (window as any).__regs.find(
+              ([o]: any) => o.name === 'sidebar.right.tab.document.actions',
+            )[1],
+            { sessionId: 'sess', absolutePath: path },
+          ),
+        );
+      },
+      [fileAddr(f), f],
+    );
     await page.click('#actions [data-delete-file] button');
     await page.click('[data-dlf-dialog] button[type=submit]');
     await page.waitForFunction(() =>
