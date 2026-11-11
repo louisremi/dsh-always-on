@@ -27,6 +27,7 @@ const REACT_DOM_UMD =
   process.env.REACT_DOM_UMD ?? require.resolve('react-dom/umd/react-dom.development.js');
 const { handleSave } = await import('../src/save-route.ts');
 const { handleCreateFile, handleCreateFolder } = await import('../src/create-route.ts');
+const { handleRenameFile, handleDeleteFile } = await import('../src/entry-route.ts');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
 const versionOf = (p: string) => {
@@ -88,7 +89,8 @@ window.__ModuleLoader__={load:(m)=>{window.__mod=m;}};</script>
 const params=new URLSearchParams(location.search);
 const t=(k,v)=>k+(v?JSON.stringify(v):'');
 const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
- sidebarRight:{openResource:(a,o)=>window.__opened.push([a,o]),openTab:()=>{},registerCloseHandler:(k,f)=>{window.__closeHandlers[k]=f;return()=>{}}},
+ sidebarRight:{openResource:(a,o)=>window.__opened.push([a,o]),openTab:()=>{},registerCloseHandler:(k,f)=>{window.__closeHandlers[k]=f;return()=>{}},
+  tabsIn:()=>window.__tabs||[],closeIn:(s,id)=>{(window.__closed=window.__closed||[]).push(id);}},
  sidebarRightTabs:{register:(d)=>{window.__tabTypes.push(d);return()=>{}}},
  theme:{getTheme:()=>({active:{colorScheme:params.get('dark')?'dark':'light'}})},
  on:()=>()=>{},
@@ -167,6 +169,22 @@ const server = http.createServer(async (req, res) => {
     } catch {
       return send(404, 'nope');
     }
+  }
+  const mutations: Record<string, (ctx: SaveContext, r: Request) => Promise<Response>> = {
+    '/api/rename.file': handleRenameFile,
+    '/api/delete.file': handleDeleteFile,
+  };
+  if (url.pathname in mutations) {
+    const body = await new Promise<Buffer>((r) => {
+      const c: Buffer[] = [];
+      req.on('data', (d) => c.push(d));
+      req.on('end', () => r(Buffer.concat(c)));
+    });
+    const out = await mutations[url.pathname](
+      hostCtx,
+      new Request(`http://x${url.pathname}`, { method: 'POST', body: new Uint8Array(body) }),
+    );
+    return send(out.status, await out.text(), 'application/json');
   }
   if (url.pathname === '/api/create.file' || url.pathname === '/api/create.folder') {
     const body = await new Promise<Buffer>((r) => {
@@ -400,6 +418,103 @@ await check(
         document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
       ),
     );
+  },
+);
+
+const fileAddr = (p: string) =>
+  `dsh-resource://file/session/sess/${p.split('/').map(encodeURIComponent).join('/')}`;
+
+await check(
+  'Rename: moves the file, refuses taken names, reopens it and closes old tabs',
+  async (page) => {
+    const f = join(dir, 'ren.txt');
+    writeFileSync(f, 'r');
+    writeFileSync(join(dir, 'taken-ren.txt'), 'keep');
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(f)}`);
+    await page.evaluate((a: string) => {
+      (window as any).__tabs = [{ id: 'p1', kind: 'text', contentId: a }];
+    }, fileAddr(f));
+    await page.click('[data-rename-file] button');
+    const value = await page.inputValue('[data-dlf-dialog] input');
+    assert.equal(value, 'ren.txt');
+    // Stem selected, extension not.
+    assert.equal(
+      await page.evaluate(() => {
+        const i = document.querySelector('[data-dlf-dialog] input') as HTMLInputElement;
+        return [i.selectionStart, i.selectionEnd].join(',');
+      }),
+      '0,3',
+    );
+    await page.fill('[data-dlf-dialog] input', 'taken-ren.txt');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() =>
+      /create\.exists/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+    assert.equal(readFileSync(join(dir, 'taken-ren.txt'), 'utf8'), 'keep');
+    await page.fill('[data-dlf-dialog] input', 'moved/ren2.txt');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.equal(readFileSync(join(dir, 'moved/ren2.txt'), 'utf8'), 'r');
+    assert.throws(() => readFileSync(f));
+    assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['p1']);
+    assert.deepEqual((await page.evaluate(() => (window as any).__opened)).at(-1), [
+      fileAddr(join(dir, 'moved/ren2.txt')),
+      {},
+    ]);
+  },
+);
+
+await check(
+  'Delete: confirms, deletes, closes tabs; blocked while an editor is dirty',
+  async (page) => {
+    const f = join(dir, 'del.txt');
+    writeFileSync(f, 'd');
+    // A dirty editor tab on this file blocks the delete.
+    await page.route('https://cdn.jsdelivr.net/**', (route: any) => route.abort());
+    await page.goto(`${base}/?what=editor&addr=${encodeURIComponent(fileAddr(f))}`);
+    await page.waitForSelector('textarea.dlf-ed-text', { timeout: 30000 });
+    await page.click('textarea.dlf-ed-text');
+    await page.keyboard.type('x');
+    await page.waitForFunction(() => document.querySelector('.dlf-ed-dot'));
+    await page.evaluate(([a, path]: string[]) => {
+      (window as any).__tabs = [{ id: 'tab1', kind: 'dlf-editor', contentId: a }];
+      const host = document.createElement('div');
+      host.id = 'actions';
+      document.body.appendChild(host);
+      (window as any).ReactDOM.createRoot(host).render(
+        (window as any).React.createElement(
+          (window as any).__regs.find(
+            ([o]: any) => o.name === 'sidebar.right.tab.document.actions',
+          )[1],
+          { sessionId: 'sess', absolutePath: path },
+        ),
+      );
+    }, [fileAddr(f), f]);
+    await page.click('#actions [data-delete-file] button');
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForFunction(() =>
+      /entry\.dirty/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+    assert.equal(readFileSync(f, 'utf8'), 'd');
+    await page.keyboard.press('Escape');
+    // A clean page (no dirty editor): deletes and closes the preview tab.
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(f)}`);
+    await page.evaluate((a: string) => {
+      (window as any).__tabs = [{ id: 'p9', kind: 'text', contentId: a }];
+    }, fileAddr(f));
+    await page.click('[data-delete-file] button');
+    assert.match(
+      await page.textContent('[data-dlf-dialog]'),
+      /delete\.question\{"name":"del\.txt"\}/,
+    );
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.throws(() => readFileSync(f));
+    assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['p9']);
   },
 );
 

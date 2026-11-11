@@ -55,6 +55,8 @@ window.__ModuleLoader__.load({
     const SAVE_ROUTE = 'api/save.file';
     const CREATE_FILE_ROUTE = 'api/create.file';
     const CREATE_FOLDER_ROUTE = 'api/create.folder';
+    const RENAME_FILE_ROUTE = 'api/rename.file';
+    const DELETE_FILE_ROUTE = 'api/delete.file';
     const STOCK_ID = 'open-in-app';
     const ERROR_MS = 4000;
 
@@ -117,6 +119,14 @@ window.__ModuleLoader__.load({
       'create.invalid': 'Enter a name without \\, control characters, or . and .. parts.',
       'create.denied': "This is not permitted in this session's sandbox mode.",
       'create.failed': 'Could not create it. Try again.',
+      'rename.title': 'Rename or move',
+      'rename.hint': 'Use / to move it into a folder, or type an absolute path.',
+      'rename.confirm': 'Rename',
+      'rename.missing': 'The file no longer exists.',
+      'delete.title': 'Delete file',
+      'delete.question': 'Delete {name}? This cannot be undone.',
+      'delete.confirm': 'Delete',
+      'entry.dirty': 'This file has unsaved edits in the editor. Save or discard them first.',
     };
     const zh = {
       'download.title': '下载文件',
@@ -152,6 +162,14 @@ window.__ModuleLoader__.load({
       'create.invalid': '名称不能包含 \\、控制字符，或 . 和 .. 路径段。',
       'create.denied': '当前会话的沙箱模式不允许此操作。',
       'create.failed': '无法创建，请重试。',
+      'rename.title': '重命名或移动',
+      'rename.hint': '可用 / 移动到文件夹中，或输入绝对路径。',
+      'rename.confirm': '重命名',
+      'rename.missing': '文件已不存在。',
+      'delete.title': '删除文件',
+      'delete.question': '要删除 {name} 吗？此操作无法撤销。',
+      'delete.confirm': '删除',
+      'entry.dirty': '此文件在编辑器中有未保存的修改，请先保存或放弃。',
     };
 
     const CSS = `
@@ -270,12 +288,38 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function RenameIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', { d: 'M2 5.5H14M2 10.5H9', stroke: 'currentColor' }),
+        h('path', { d: 'M11.5 8.5L14 10.5L11.5 12.5', stroke: 'currentColor' }),
+      );
+    }
+
+    function DeleteIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', { d: 'M2.5 4H13.5M6 4V2.5H10V4', stroke: 'currentColor' }),
+        h('path', {
+          d: 'M3.75 4L4.5 13.5C4.5 13.776 4.724 14 5 14H11C11.276 14 11.5 13.776 11.5 13.5L12.25 4',
+          stroke: 'currentColor',
+        }),
+        h('path', { d: 'M6.75 6.5V11.5M9.25 6.5V11.5', stroke: 'currentColor' }),
+      );
+    }
+
     // ─────────────────────────── file addresses ───────────────────────────
 
     // Sidebar surface the buttons drive: tab switching, resource tabs, close guards.
     interface SidebarRight {
       openTab(tab: string): unknown;
-      openResource(address: string, options: { kind: string }): unknown;
+      /** Open tab records of a session (present on the stock controller). */
+      tabsIn?(sessionId: string): readonly { id: string; kind: string; contentId: string }[];
+      /** Close one tab of a session, running its close handler. */
+      closeIn?(sessionId: string, tabId: string): void;
+      openResource(address: string, options: { kind?: string }): unknown;
       registerCloseHandler(
         kind: string,
         handler: (sessionId: string, tab: { id: string; title: string }) => void,
@@ -502,6 +546,7 @@ window.__ModuleLoader__.load({
     /** Message key for a failed mutation response. */
     function mutationErrorKey(status: number): string {
       if (status === 409) return 'create.exists';
+      if (status === 404) return 'rename.missing';
       if (status === 400) return 'create.invalid';
       if (status === 403) return 'create.denied';
       return 'create.failed';
@@ -722,6 +767,144 @@ window.__ModuleLoader__.load({
                   console.warn('open new file rejected:', error);
                 }
               }
+              return undefined;
+            },
+          }),
+      );
+    }
+
+    /**
+     * Open sidebar tabs (preview or editor) showing a Host file. Tab addresses
+     * hold an absolute path or one relative to the session's workspace, which
+     * the browser does not know, so a relative path matches by suffix.
+     */
+    function tabsShowing(sidebarRight: SidebarRight, sessionId: string, absolutePath: string) {
+      let tabs: readonly { id: string; kind: string; contentId: string }[] = [];
+      try {
+        tabs = sidebarRight.tabsIn?.(sessionId) ?? [];
+      } catch {
+        return [];
+      }
+      return tabs.filter((tab) => {
+        const path = parseFileAddress(tab.contentId)?.path;
+        if (path === undefined) return false;
+        return path.startsWith('/') ? path === absolutePath : absolutePath.endsWith(`/${path}`);
+      });
+    }
+
+    /** Close the given tabs; best effort (a newer Harness may lack closeIn). */
+    function closeTabs(sidebarRight: SidebarRight, sessionId: string, ids: string[]) {
+      for (const id of ids) {
+        try {
+          sidebarRight.closeIn?.(sessionId, id);
+        } catch (error) {
+          console.warn('close tab rejected:', error);
+        }
+      }
+    }
+
+    /** Rename/move and Delete for the file shown in the sidebar preview. */
+    function EntryButtons({
+      sessionId,
+      absolutePath,
+      sidebarRight,
+      t,
+    }: {
+      sessionId?: unknown;
+      absolutePath?: unknown;
+      sidebarRight: SidebarRight;
+      t: Translate;
+    }) {
+      const [open, setOpen] = React.useState(undefined);
+      if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
+      const name = baseName(absolutePath);
+      /** Error key when an editor holds unsaved edits of this file. */
+      const dirtyEditor = () =>
+        tabsShowing(sidebarRight, sessionId, absolutePath).some((tab) =>
+          dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)),
+        )
+          ? 'entry.dirty'
+          : undefined;
+      const button = (kind: 'rename' | 'delete') => {
+        const label = t(kind === 'rename' ? 'rename.title' : 'delete.title');
+        return h(
+          'div',
+          {
+            className: 'dlf-split',
+            'data-size': 'compact',
+            [kind === 'rename' ? 'data-rename-file' : 'data-delete-file']: '',
+          },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dlf-main',
+              title: label,
+              'aria-label': label,
+              onClick: () => setOpen(kind),
+            },
+            h(kind === 'rename' ? RenameIcon : DeleteIcon, { size: 13 }),
+          ),
+        );
+      };
+      return h(
+        React.Fragment,
+        null,
+        button('rename'),
+        button('delete'),
+        open === 'rename' &&
+          h(NameDialog, {
+            title: t('rename.title'),
+            where: absolutePath,
+            hint: t('rename.hint'),
+            initial: name,
+            confirm: t('rename.confirm'),
+            t,
+            onClose: () => setOpen(undefined),
+            submit: async (destination: string) => {
+              const blocked = dirtyEditor();
+              if (blocked !== undefined) return blocked;
+              const before = tabsShowing(sidebarRight, sessionId, absolutePath).map(
+                (tab) => tab.id,
+              );
+              const res = await postJson(RENAME_FILE_ROUTE, {
+                sessionId,
+                path: absolutePath,
+                destination,
+              });
+              if (!res.ok) return mutationErrorKey(res.status);
+              if (res.body.absolutePath !== absolutePath) {
+                closeTabs(sidebarRight, sessionId, before);
+                try {
+                  sidebarRight.openResource(
+                    sessionFileAddress(sessionId, res.body.absolutePath),
+                    {},
+                  );
+                } catch (error) {
+                  console.warn('open renamed file rejected:', error);
+                }
+              }
+              return undefined;
+            },
+          }),
+        open === 'delete' &&
+          h(NameDialog, {
+            title: t('delete.title'),
+            where: absolutePath,
+            hint: t('delete.question', { name }),
+            confirm: t('delete.confirm'),
+            danger: true,
+            t,
+            onClose: () => setOpen(undefined),
+            submit: async () => {
+              const blocked = dirtyEditor();
+              if (blocked !== undefined) return blocked;
+              const before = tabsShowing(sidebarRight, sessionId, absolutePath).map(
+                (tab) => tab.id,
+              );
+              const res = await postJson(DELETE_FILE_ROUTE, { sessionId, path: absolutePath });
+              if (!res.ok) return mutationErrorKey(res.status);
+              closeTabs(sidebarRight, sessionId, before);
               return undefined;
             },
           }),
@@ -1568,6 +1751,12 @@ window.__ModuleLoader__.load({
                   t,
                 }),
                 h(DownloadButton, { url: pathUrl(props.absolutePath), t }),
+                h(EntryButtons, {
+                  sessionId: props.sessionId,
+                  absolutePath: props.absolutePath,
+                  sidebarRight: ctx.sidebarRight,
+                  t,
+                }),
               )
             : null;
         const PathDownloadProminent = (props: { absolutePath?: unknown }) =>

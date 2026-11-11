@@ -29,6 +29,7 @@ import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox';
 import type { DownloadContext, LiveSession, SaveContext } from '../src/context.ts';
 import { handleCreateFile, handleCreateFolder } from '../src/create-route.ts';
 import { handleDownload } from '../src/download-route.ts';
+import { handleDeleteFile, handleRenameFile } from '../src/entry-route.ts';
 import { canonicalPath, mayWrite } from '../src/fence.ts';
 import { handleSave } from '../src/save-route.ts';
 
@@ -327,6 +328,96 @@ test('create.folder follows the sandbox and rejects bad names', async () => {
     name: 'full-dir',
   });
   assert.equal(full.status, 201);
+});
+
+// ──────────────────────── rename / delete file ────────────────────────
+
+const entry = (handle: typeof handleRenameFile, ctx: SaveContext, body: Record<string, unknown>) =>
+  handle(
+    ctx,
+    new Request('http://x/api/entry', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 'sess', ...body }),
+    }),
+  );
+const rename = (ctx: SaveContext, path: string, destination: string) =>
+  entry(handleRenameFile, ctx, { path, destination });
+const remove = (ctx: SaveContext, path: string) => entry(handleDeleteFile, ctx, { path });
+
+test('rename.file renames in place and moves into new folders', async () => {
+  const host = realHost();
+  const from = join(workspace, 'r1.txt');
+  writeFileSync(from, 'content');
+  const res = await rename(host.save, from, 'r2.txt');
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).absolutePath, join(workspace, 'r2.txt'));
+  assert.ok(!existsSync(from));
+  assert.equal(readFileSync(join(workspace, 'r2.txt'), 'utf8'), 'content');
+  const moved = await rename(host.save, join(workspace, 'r2.txt'), join(workspace, 'm/n/r3.txt'));
+  assert.equal(moved.status, 200);
+  assert.equal(readFileSync(join(workspace, 'm/n/r3.txt'), 'utf8'), 'content');
+  // Same name: a no-op success.
+  assert.equal((await rename(host.save, join(workspace, 'm/n/r3.txt'), 'r3.txt')).status, 200);
+});
+
+test('rename.file never replaces anything at the destination', async () => {
+  const host = realHost();
+  writeFileSync(join(workspace, 's1.txt'), 'mine');
+  writeFileSync(join(workspace, 's2.txt'), 'theirs');
+  assert.equal((await rename(host.save, join(workspace, 's1.txt'), 's2.txt')).status, 409);
+  assert.equal(readFileSync(join(workspace, 's2.txt'), 'utf8'), 'theirs');
+  assert.equal(readFileSync(join(workspace, 's1.txt'), 'utf8'), 'mine');
+  assert.equal((await rename(host.save, join(workspace, 's1.txt'), 'sub')).status, 409);
+  assert.equal((await rename(host.save, join(workspace, 's1.txt'), 'escape.txt')).status, 409);
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'secret\n');
+});
+
+test('rename.file follows the sandbox, refuses folders, symlinks and bad names', async () => {
+  const file = join(workspace, 't1.txt');
+  writeFileSync(file, 'x');
+  assert.equal((await rename(realHost('read-only').save, file, 't2.txt')).status, 403);
+  const host = realHost();
+  assert.equal((await rename(host.save, file, join(outside, 'stolen.txt'))).status, 403);
+  assert.equal((await rename(host.save, file, 'escape-dir/stolen.txt')).status, 403);
+  assert.ok(!existsSync(join(outside, 'stolen.txt')));
+  assert.ok(existsSync(file));
+  assert.equal(
+    (await rename(host.save, join(outside, 'secret.txt'), join(workspace, 'in.txt'))).status,
+    403,
+  );
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'secret\n');
+  assert.equal((await rename(host.save, join(workspace, 'sub'), 'sub2')).status, 403);
+  assert.equal((await rename(host.save, join(workspace, 'escape.txt'), 'e2.txt')).status, 403);
+  assert.ok(existsSync(join(workspace, 'escape.txt')));
+  for (const destination of ['', '..', '../x.txt', 'a/../b', 'a\\b']) {
+    assert.equal((await rename(host.save, file, destination)).status, 400, destination);
+  }
+  assert.equal((await rename(host.save, join(workspace, 'gone.txt'), 'x.txt')).status, 404);
+  assert.equal((await rename(host.save, 'relative.txt', 'x.txt')).status, 400);
+});
+
+test('delete.file deletes one regular file inside the sandbox only', async () => {
+  const host = realHost();
+  const file = join(workspace, 'd1.txt');
+  writeFileSync(file, 'bye');
+  assert.equal((await remove(realHost('read-only').save, file)).status, 403);
+  assert.ok(existsSync(file));
+  const res = await remove(host.save, file);
+  assert.equal(res.status, 200);
+  assert.ok(!existsSync(file));
+  assert.equal((await remove(host.save, file)).status, 404);
+  assert.equal((await remove(host.save, join(outside, 'secret.txt'))).status, 403);
+  assert.equal((await remove(host.save, join(workspace, 'sub'))).status, 403);
+  assert.ok(isDir(join(workspace, 'sub')));
+  // A symlink is refused, never followed: neither the link nor its target goes.
+  assert.equal((await remove(host.save, join(workspace, 'escape.txt'))).status, 403);
+  assert.ok(existsSync(join(workspace, 'escape.txt')));
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'secret\n');
+  assert.equal((await remove(host.save, join(workspace, 'escape-dir/secret.txt'))).status, 403);
+  assert.ok(existsSync(join(outside, 'secret.txt')));
+  const full = join(outside, 'deletable.txt');
+  writeFileSync(full, 'x');
+  assert.equal((await remove(realHost('danger-full-access').save, full)).status, 200);
 });
 
 test('fence: canonical paths and the narrow workspace-only grant', async () => {
