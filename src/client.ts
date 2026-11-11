@@ -53,6 +53,7 @@ window.__ModuleLoader__.load({
     const NS = 'always-on';
     const ROUTE = 'api/download.file';
     const SAVE_ROUTE = 'api/save.file';
+    const CREATE_FILE_ROUTE = 'api/create.file';
     const STOCK_ID = 'open-in-app';
     const ERROR_MS = 4000;
 
@@ -105,6 +106,14 @@ window.__ModuleLoader__.load({
       'editor.noRoute':
         'Saving is unavailable: the Harness has no save route (restart the Harness to load the updated plugin).',
       'editor.retry': 'Try again',
+      'create.file': 'New file',
+      'create.fileHint': 'Use / to create it in a new folder, e.g. notes/todo.md',
+      'create.create': 'Create',
+      'create.cancel': 'Cancel',
+      'create.exists': 'Something with that name already exists here.',
+      'create.invalid': 'Enter a name without \\, control characters, or . and .. parts.',
+      'create.denied': "Creating files here is not permitted in this session's sandbox mode.",
+      'create.failed': 'Could not create it. Try again.',
     };
     const zh = {
       'download.title': '下载文件',
@@ -130,6 +139,14 @@ window.__ModuleLoader__.load({
       'editor.gone': '文件已不存在。',
       'editor.noRoute': '无法保存：Harness 没有保存接口（请重启 Harness 以加载更新后的插件）。',
       'editor.retry': '重试',
+      'create.file': '新建文件',
+      'create.fileHint': '可用 / 在新文件夹中创建，例如 notes/todo.md',
+      'create.create': '创建',
+      'create.cancel': '取消',
+      'create.exists': '此处已存在同名项目。',
+      'create.invalid': '名称不能包含 \\、控制字符，或 . 和 .. 路径段。',
+      'create.denied': '当前会话的沙箱模式不允许在此处创建文件。',
+      'create.failed': '无法创建，请重试。',
     };
 
     const CSS = `
@@ -158,6 +175,19 @@ window.__ModuleLoader__.load({
 .dlf-ed-text{position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;margin:0;padding:8px 10px;resize:none;border:0;outline:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;tab-size:4;white-space:pre}
 .dlf-ed-titleIcon{flex:none}
 .dlf-ed-msg{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px 12px;color:var(--dsw-alias-label-secondary)}
+.dlf-tool{width:28px;height:28px;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:6px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);line-height:1;cursor:pointer}
+.dlf-tool:hover,.dlf-tool:focus-visible{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.dlf-dlg-back{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:flex-start;justify-content:center;padding-top:18vh;background:rgba(0,0,0,.28)}
+.dlf-dlg{box-sizing:border-box;width:min(420px,calc(100vw - 32px));display:flex;flex-direction:column;gap:10px;padding:16px;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg,10px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base));color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:13px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.dlf-dlg-title{margin:0;font-size:14px;font-weight:600}
+.dlf-dlg-where{color:var(--dsw-alias-label-secondary);font-size:12px;overflow-wrap:anywhere}
+.dlf-dlg-input{box-sizing:border-box;width:100%;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-base);color:inherit;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;outline:0}
+.dlf-dlg-input:focus{border-color:var(--dsw-alias-label-secondary)}
+.dlf-dlg-hint{color:var(--dsw-alias-label-secondary);font-size:12px}
+.dlf-dlg-error{color:var(--dsw-alias-state-error-primary);font-size:12px}
+.dlf-dlg-actions{display:flex;justify-content:flex-end;gap:8px}
+.dlf-dlg .dlf-ed-btn[data-primary]{background:var(--dsw-alias-interactive-bg-hover)}
+.dlf-dlg .dlf-ed-btn[data-danger]{color:var(--dsw-alias-state-error-primary)}
 `;
 
     // ───────────────────────────── icons ─────────────────────────────
@@ -207,6 +237,19 @@ window.__ModuleLoader__.load({
         { size },
         h('path', { d: 'M10.5 2.5L13.5 5.5L5.5 13.5H2.5V10.5L10.5 2.5Z', stroke: 'currentColor' }),
         h('path', { d: 'M9 4L12 7', stroke: 'currentColor' }),
+      );
+    }
+
+    function NewFileIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', {
+          d: 'M9 1.5H3.5C2.948 1.5 2.5 1.948 2.5 2.5V13.5C2.5 14.052 2.948 14.5 3.5 14.5H12.5C13.052 14.5 13.5 14.052 13.5 13.5V6L9 1.5Z',
+          stroke: 'currentColor',
+        }),
+        h('path', { d: 'M9 1.5V6H13.5', stroke: 'currentColor' }),
+        h('path', { d: 'M8 8.5V12.5M6 10.5H10', stroke: 'currentColor' }),
       );
     }
 
@@ -425,6 +468,237 @@ window.__ModuleLoader__.load({
       const to = new URL(ROUTE, document.baseURI);
       to.searchParams.set('path', absolutePath);
       return to.href;
+    }
+
+    // ───────────────────────── dialogs & mutations ─────────────────────────
+
+    /** Same rule as the Host's nameSegments() in src/create-route.ts. */
+    function validName(name: string): boolean {
+      if (name.length === 0 || name.length > 1024) return false;
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+      if (/[\u0000-\u001f\u007f\\]/.test(name)) return false;
+      return name
+        .split('/')
+        .every((s) => s.length > 0 && s !== '.' && s !== '..' && s.trim() === s);
+    }
+
+    /** Message key for a failed mutation response. */
+    function mutationErrorKey(status: number): string {
+      if (status === 409) return 'create.exists';
+      if (status === 400) return 'create.invalid';
+      if (status === 403) return 'create.denied';
+      return 'create.failed';
+    }
+
+    /** POST a JSON body to one of the plugin's routes; returns the status and parsed body. */
+    async function postJson(
+      route: string,
+      body: unknown,
+    ): Promise<{ status: number; ok: boolean; body: any }> {
+      const response = await fetch(new URL(route, document.baseURI).href, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const parsed = await response.json().catch(() => ({}));
+      return { status: response.status, ok: response.ok, body: parsed };
+    }
+
+    let ReactDOM: any;
+    try {
+      ReactDOM = require('react-dom');
+    } catch {
+      /* rendered inline instead of in a portal */
+    }
+
+    /**
+     * A small modal asking for a name (or just a confirmation when `initial`
+     * is undefined). `submit` returns an error message key to keep the dialog
+     * open with that message, or undefined to close it.
+     */
+    function NameDialog({
+      title,
+      where,
+      hint,
+      initial,
+      confirm,
+      danger,
+      t,
+      submit,
+      onClose,
+    }: {
+      title: string;
+      where?: string | undefined;
+      hint?: string | undefined;
+      initial?: string | undefined;
+      confirm: string;
+      danger?: boolean;
+      t: Translate;
+      submit: (name: string) => Promise<string | undefined>;
+      onClose: () => void;
+    }) {
+      const [value, setValue] = React.useState(initial ?? '');
+      const [error, setError] = React.useState(undefined);
+      const [busy, setBusy] = React.useState(false);
+      const input = React.useRef(null);
+      const asksName = initial !== undefined;
+      React.useEffect(() => {
+        const el = input.current;
+        if (el === null) return;
+        el.focus();
+        // Select the stem, not the extension, like file managers do.
+        const dot = el.value.lastIndexOf('.');
+        el.setSelectionRange(0, dot > 0 ? dot : el.value.length);
+      }, []);
+      React.useEffect(() => {
+        const onKey = (event: KeyboardEvent) => {
+          if (event.key === 'Escape' && !busy) onClose();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, [busy, onClose]);
+      const name = value.trim();
+      const invalid = asksName && name.length > 0 && !validName(name);
+      const run = async () => {
+        if (busy || (asksName && (name.length === 0 || invalid))) return;
+        setBusy(true);
+        setError(undefined);
+        let key: string | undefined;
+        try {
+          key = await submit(name);
+        } catch {
+          key = 'create.failed';
+        }
+        setBusy(false);
+        if (key === undefined) onClose();
+        else setError(key);
+      };
+      const dialog = h(
+        'div',
+        {
+          className: 'dlf-dlg-back',
+          onMouseDown: (event: MouseEvent) => {
+            if (event.target === event.currentTarget && !busy) onClose();
+          },
+        },
+        h(
+          'form',
+          {
+            className: 'dlf-dlg',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': title,
+            'data-dlf-dialog': '',
+            onSubmit: (event: Event) => {
+              event.preventDefault();
+              run();
+            },
+          },
+          h('h2', { className: 'dlf-dlg-title' }, title),
+          where && h('div', { className: 'dlf-dlg-where' }, where),
+          asksName &&
+            h('input', {
+              ref: input,
+              className: 'dlf-dlg-input',
+              value,
+              spellCheck: false,
+              autoComplete: 'off',
+              'aria-label': title,
+              'aria-invalid': invalid || error !== undefined ? 'true' : undefined,
+              onChange: (event: any) => {
+                setValue(event.target.value);
+                setError(undefined);
+              },
+            }),
+          (invalid || error !== undefined) &&
+            h(
+              'div',
+              { className: 'dlf-dlg-error', role: 'alert' },
+              t(invalid ? 'create.invalid' : (error as string)),
+            ),
+          hint && !invalid && error === undefined && h('div', { className: 'dlf-dlg-hint' }, hint),
+          h(
+            'div',
+            { className: 'dlf-dlg-actions' },
+            h(
+              'button',
+              { type: 'button', className: 'dlf-ed-btn', disabled: busy, onClick: onClose },
+              t('create.cancel'),
+            ),
+            h(
+              'button',
+              {
+                type: 'submit',
+                className: 'dlf-ed-btn',
+                'data-primary': danger ? undefined : '',
+                'data-danger': danger ? '' : undefined,
+                disabled: busy || (asksName && (name.length === 0 || invalid)),
+              },
+              confirm,
+            ),
+          ),
+        ),
+      );
+      return ReactDOM?.createPortal ? ReactDOM.createPortal(dialog, document.body) : dialog;
+    }
+
+    /** "New file" in the Files tab toolbar: creates an empty file and opens it in the editor. */
+    function NewFileButton({
+      sessionId,
+      absolutePath,
+      sidebarRight,
+      t,
+    }: {
+      sessionId?: unknown;
+      absolutePath?: unknown;
+      sidebarRight: SidebarRight;
+      t: Translate;
+    }) {
+      const [open, setOpen] = React.useState(false);
+      if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
+      const label = t('create.file');
+      return h(
+        React.Fragment,
+        null,
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dlf-tool',
+            title: label,
+            'aria-label': label,
+            'data-new-file': '',
+            onClick: () => setOpen(true),
+          },
+          h(NewFileIcon, { size: 16 }),
+        ),
+        open &&
+          h(NameDialog, {
+            title: label,
+            where: absolutePath,
+            hint: t('create.fileHint'),
+            initial: '',
+            confirm: t('create.create'),
+            t,
+            onClose: () => setOpen(false),
+            submit: async (name: string) => {
+              const res = await postJson(CREATE_FILE_ROUTE, {
+                sessionId,
+                directory: absolutePath,
+                name,
+              });
+              if (!res.ok) return mutationErrorKey(res.status);
+              try {
+                sidebarRight.openResource(sessionFileAddress(sessionId, res.body.absolutePath), {
+                  kind: EDITOR_KIND,
+                });
+              } catch (error) {
+                console.warn('open new file rejected:', error);
+              }
+              return undefined;
+            },
+          }),
+      );
     }
 
     // ─────────────────────── text helpers (pure) ───────────────────────
@@ -1246,6 +1520,8 @@ window.__ModuleLoader__.load({
         const SessionShowFiles = () => h(ShowFiles, { sidebarRight: ctx.sidebarRight, t });
         // Inside the Files tab a "Show files" button would be a no-op: render nothing.
         const HiddenInFilesTab = () => null;
+        const FilesTabNewFile = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
+          h(NewFileButton, { ...props, sidebarRight: ctx.sidebarRight, t });
 
         const FileRouteDownload = (props: { actionUrl?: unknown }) => {
           const url = routeUrl(props.actionUrl);
@@ -1310,6 +1586,17 @@ window.__ModuleLoader__.load({
               locale: NS,
             },
             HiddenInFilesTab,
+          ),
+        );
+        ctx.slots.inject('sidebar.right.tab.files.actions', () =>
+          ctx.slots.register(
+            {
+              name: 'sidebar.right.tab.files.actions',
+              id: `${EDITOR_ID}/new-file`,
+              order: 10,
+              locale: NS,
+            },
+            FilesTabNewFile,
           ),
         );
 

@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
-import type { SandboxPolicy, SaveContext, SaveRegisterContext, WriteIntent } from './context.ts';
+import type { SaveContext, SaveRegisterContext, WriteIntent } from './context.ts';
 import { failureStatus } from './download-route.ts';
+import { policyFor } from './session-policy.ts';
 
 export const SAVE_PATH = '/api/save.file';
 /** Largest file the editor opens or saves; also bounds the request body. */
@@ -60,28 +61,6 @@ async function parse(request: Request): Promise<SaveInput | Response> {
     return fail(400, 'expectedVersion required unless force');
   }
   return { sessionId, path, content, expectedVersion, force: force === true };
-}
-
-/**
- * Sandbox policy for the Session the save belongs to: the Session's own
- * workspace boundary and mode when it is live, else its persisted workspace
- * root under the deployment default mode. Never widened beyond that.
- */
-async function policyFor(
-  ctx: SaveContext,
-  sessionId: string,
-  signal: AbortSignal,
-): Promise<SandboxPolicy | undefined> {
-  const live = ctx.sessions?.get(sessionId);
-  if (live !== undefined) return ctx.sandboxPolicy.resolve({ session: live });
-  const stored = await ctx.get('sessionPersistence')?.stat(sessionId);
-  signal.throwIfAborted();
-  if (stored === undefined) return undefined;
-  return {
-    mode: ctx.sandboxPolicy.defaultMode,
-    workspaceRoot: stored.header?.cwd ?? ctx.sandboxPolicy.workspaceRoot,
-    sessionId,
-  };
 }
 
 /**

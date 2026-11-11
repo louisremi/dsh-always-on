@@ -12,12 +12,12 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { SaveContext } from '../src/context.ts';
 
 const require = createRequire(import.meta.url);
@@ -26,6 +26,7 @@ const REACT_UMD = process.env.REACT_UMD ?? require.resolve('react/umd/react.deve
 const REACT_DOM_UMD =
   process.env.REACT_DOM_UMD ?? require.resolve('react-dom/umd/react-dom.development.js');
 const { handleSave } = await import('../src/save-route.ts');
+const { handleCreateFile } = await import('../src/create-route.ts');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
 const versionOf = (p: string) => {
@@ -46,6 +47,11 @@ const hostCtx: SaveContext = {
       }
     },
     writeText: async (t, content, intent) => {
+      if (intent?.kind === 'createIfAbsent') {
+        mkdirSync(dirname(t.displayPath!), { recursive: true });
+        writeFileSync(t.displayPath!, content, { flag: 'wx' });
+        return { operation: 'create', version: versionOf(t.displayPath!) };
+      }
       if (intent?.kind === 'replaceIfVersion' && intent.version !== versionOf(t.displayPath!))
         throw Object.assign(new Error('stale'), { code: 'FS_STALE_VERSION' });
       writeFileSync(t.displayPath!, content);
@@ -93,7 +99,7 @@ const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
  slots:{inject:(n,f)=>f(),register:(o,c)=>{window.__regs.push([o,c]);}}};
 const exp=window.__mod.factory((s)=>{if(s==='react')return window.React;if(s==='@deepseek-ai/dsh-client-ui-primitives'){if(params.get('prim')==='none'||!window.__ft)throw new Error('missing');return window.__ft;}throw new Error(s)});
 exp.apply(ctx);
-const reg=(name,key)=>window.__regs.find(([o])=>o.name===name&&(key===undefined||o.key===key))[1];
+const reg=(name,key,id)=>window.__regs.find(([o])=>o.name===name&&(key===undefined||o.key===key)&&(id===undefined||o.id===id))[1];
 const h=React.createElement;
 const info={tab:{id:'tab1',contentId:params.get('addr'),title:'x',signal:new AbortController().signal,actions:{bindCommands:()=>()=>{}}}};
 window.__mountTitles=(titles)=>{
@@ -103,6 +109,7 @@ window.__mountTitles=(titles)=>{
 window.__mount=(what)=>{
   const root=ReactDOM.createRoot(document.getElementById('root'));
   if(what==='editor') root.render(h(reg('sidebar.right.pane.tab',Object.keys({})[0]||'@louisremi/dsh-always-on/editor'),{useTabInfo:()=>info,sessionId:'sess'}));
+  else if(what==='newfile') root.render(h(reg('sidebar.right.tab.files.actions',undefined,'@louisremi/dsh-always-on/editor/new-file'),{sessionId:'sess',absolutePath:params.get('abs')}));
   else root.render(h(reg('sidebar.right.tab.document.actions'),{sessionId:'sess',absolutePath:params.get('abs')}));
 };
 if(params.get('what')==='titles')window.__mountTitles((params.get('t')||'').split('|'));else window.__mount(params.get('what'));
@@ -160,6 +167,18 @@ const server = http.createServer(async (req, res) => {
     } catch {
       return send(404, 'nope');
     }
+  }
+  if (url.pathname === '/api/create.file') {
+    const body = await new Promise<Buffer>((r) => {
+      const c: Buffer[] = [];
+      req.on('data', (d) => c.push(d));
+      req.on('end', () => r(Buffer.concat(c)));
+    });
+    const out = await handleCreateFile(
+      hostCtx,
+      new Request('http://x/api/create.file', { method: 'POST', body: new Uint8Array(body) }),
+    );
+    return send(out.status, await out.text(), 'application/json');
   }
   if (url.pathname === '/api/save.file') {
     const body = await new Promise<Buffer>((r) => {
@@ -322,6 +341,45 @@ await check('Save button saves; second edit after save uses the fresh version', 
     'dark theme applied',
   );
 });
+
+await check(
+  'New file: dialog validates, refuses an existing name, creates and opens the editor',
+  async (page) => {
+    writeFileSync(join(dir, 'exists.txt'), 'keep');
+    await page.goto(`${base}/?what=newfile&abs=${encodeURIComponent(dir)}`);
+    await page.click('[data-new-file]');
+    await page.waitForSelector('[data-dlf-dialog] input');
+    // Invalid name: inline error, Create disabled, nothing sent.
+    await page.fill('[data-dlf-dialog] input', '../escape.txt');
+    await page.waitForSelector('[data-dlf-dialog] [role=alert]');
+    assert.equal(await page.isDisabled('[data-dlf-dialog] button[type=submit]'), true);
+    // Existing name: the Host answers 409, the dialog stays open with a message.
+    await page.fill('[data-dlf-dialog] input', 'exists.txt');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() =>
+      /create\.exists/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+    assert.equal(readFileSync(join(dir, 'exists.txt'), 'utf8'), 'keep');
+    // A valid nested name: created empty, dialog closes, the editor opens on it.
+    await page.fill('[data-dlf-dialog] input', 'made/new.md');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.equal(readFileSync(join(dir, 'made/new.md'), 'utf8'), '');
+    const opened = await page.evaluate(() => (window as any).__opened);
+    assert.deepEqual(opened.at(-1), [
+      `dsh-resource://file/session/sess/${join(dir, 'made/new.md').split('/').map(encodeURIComponent).join('/')}`,
+      { kind: 'dlf-editor' },
+    ]);
+    // Escape closes without creating anything.
+    await page.click('[data-new-file]');
+    await page.fill('[data-dlf-dialog] input', 'never.txt');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.throws(() => readFileSync(join(dir, 'never.txt')));
+  },
+);
 
 await check(
   'external change → 409 conflict banner; Overwrite then wins; file never clobbered silently',

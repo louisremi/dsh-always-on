@@ -8,6 +8,8 @@
 export interface SandboxPolicy {
   mode: string;
   workspaceRoot: string;
+  /** Extra directories `workspace-write` may write under, besides the workspace. */
+  additionalWritableRoots?: readonly string[] | undefined;
   sessionId?: string | undefined;
 }
 
@@ -23,10 +25,9 @@ export interface FsInfo {
 }
 
 /** Mirrors the Harness's FsWriteIntent: a version guard always carries its version. */
-export interface WriteIntent {
-  kind: 'replaceIfVersion';
-  version: string;
-}
+export type WriteIntent =
+  | { kind: 'replaceIfVersion'; version: string }
+  | { kind: 'createIfAbsent' };
 
 export interface WriteOutcome {
   version: string;

@@ -25,7 +25,9 @@ import { Context } from '@deepseek-ai/cordis';
 import { WorkspaceFiles } from '@deepseek-ai/dsh-api-workspace-files';
 import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox';
 import type { DownloadContext, LiveSession, SaveContext } from '../src/context.ts';
+import { handleCreateFile } from '../src/create-route.ts';
 import { handleDownload } from '../src/download-route.ts';
+import { canonicalPath, mayWrite } from '../src/fence.ts';
 import { handleSave } from '../src/save-route.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
@@ -198,4 +200,98 @@ test('download streams the exact bytes of a real file and refuses directories', 
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), bytes);
   assert.equal((await download(host.download, join(workspace, 'sub'))).status, 403);
   assert.equal((await download(host.download, join(workspace, 'missing'))).status, 404);
+});
+
+// ─────────────────────────── create file ───────────────────────────
+
+const create = (ctx: SaveContext, body: Record<string, unknown>) =>
+  handleCreateFile(
+    ctx,
+    new Request('http://x/api/create.file', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: 'sess', directory: workspace, ...body }),
+    }),
+  );
+
+test('create.file makes an empty file, and missing sub-directories', async () => {
+  const host = realHost();
+  const res = await create(host.save, { name: 'new.txt' });
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.equal(body.absolutePath, join(workspace, 'new.txt'));
+  assert.equal(readFileSync(join(workspace, 'new.txt'), 'utf8'), '');
+  const nested = await create(host.save, { name: 'deep/er/file.md' });
+  assert.equal(nested.status, 201);
+  assert.equal(readFileSync(join(workspace, 'deep/er/file.md'), 'utf8'), '');
+  const inSub = await create(host.save, { directory: join(workspace, 'sub'), name: 'x.txt' });
+  assert.equal(inSub.status, 201);
+});
+
+test('create.file never overwrites a file, a directory or a symlink', async () => {
+  const host = realHost();
+  writeFileSync(join(workspace, 'taken.txt'), 'keep');
+  assert.equal((await create(host.save, { name: 'taken.txt' })).status, 409);
+  assert.equal(readFileSync(join(workspace, 'taken.txt'), 'utf8'), 'keep');
+  assert.equal((await create(host.save, { name: 'sub' })).status, 409);
+  assert.equal((await create(host.save, { name: 'escape.txt' })).status, 409);
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'secret\n');
+});
+
+test('create.file follows the sandbox: read-only, outside, symlinked dirs, root', async () => {
+  assert.equal((await create(realHost('read-only').save, { name: 'ro.txt' })).status, 403);
+  const host = realHost();
+  assert.equal((await create(host.save, { directory: outside, name: 'out.txt' })).status, 403);
+  assert.equal((await create(host.save, { name: 'escape-dir/out.txt' })).status, 403);
+  assert.equal(
+    (await create(host.save, { directory: join(workspace, 'escape-dir'), name: 'o.txt' })).status,
+    403,
+  );
+  assert.ok(!readdirSync(outside).includes('out.txt'));
+  assert.ok(!readdirSync(outside).includes('o.txt'));
+  assert.throws(() => readFileSync(join(workspace, 'ro.txt')));
+  // danger-full-access may create outside.
+  const full = await create(realHost('danger-full-access').save, {
+    directory: outside,
+    name: 'full.txt',
+  });
+  assert.equal(full.status, 201);
+});
+
+test('create.file rejects invalid names and bodies', async () => {
+  const host = realHost();
+  for (const name of [
+    '',
+    '.',
+    '..',
+    '../x',
+    'a/../b',
+    '/abs',
+    'a//b',
+    'a\\b',
+    'tab\there',
+    ' lead',
+  ]) {
+    assert.equal((await create(host.save, { name })).status, 400, JSON.stringify(name));
+  }
+  assert.equal((await create(host.save, { name: 'x', directory: 'relative' })).status, 400);
+  assert.equal((await create(host.save, { name: 'x', sessionId: '' })).status, 400);
+  assert.equal((await create(host.save, { name: 'x', sessionId: 'nope' })).status, 404);
+});
+
+test('fence: canonical paths and the narrow workspace-only grant', async () => {
+  const policy = { mode: 'workspace-write', workspaceRoot: workspace };
+  assert.equal(await canonicalPath(join(workspace, 'a/b/../c')), join(workspace, 'a/c'));
+  // A symlink is judged where it lives, not where it points.
+  assert.equal(await canonicalPath(join(workspace, 'escape.txt')), join(workspace, 'escape.txt'));
+  assert.equal(await mayWrite(policy, join(workspace, 'x')), true);
+  assert.equal(await mayWrite(policy, join(workspace, 'escape-dir', 'x')), false);
+  assert.equal(await mayWrite(policy, join(tmpdir(), 'x')), false, 'temp areas are not granted');
+  assert.equal(await mayWrite(policy, workspace), true);
+  assert.equal(await mayWrite(policy, workspace, { root: false }), false);
+  assert.equal(await mayWrite({ ...policy, mode: 'read-only' }, join(workspace, 'x')), false);
+  assert.equal(await mayWrite({ ...policy, mode: 'bogus' }, join(workspace, 'x')), false);
+  assert.equal(
+    await mayWrite({ ...policy, additionalWritableRoots: [outside] }, join(outside, 'x')),
+    true,
+  );
 });

@@ -6,6 +6,7 @@ Run the Harness in a Docker container — on a NAS, a server, anywhere — and i
 
 - **Download file** buttons that save a file to your computer.
 - **Show files**, which opens the sidebar file explorer.
+- **New file**, in the Files tab, which creates an empty file and opens it in the editor.
 - **Edit**, which opens a text file in an in-sidebar code editor ([Monaco](https://microsoft.github.io/monaco-editor/), the editor behind VS Code) and saves it back to the Harness host.
 
 ## Install
@@ -26,6 +27,8 @@ Nothing to configure.
 
 **Show files.** The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
 
+**New file.** In the sidebar's Files tab, the new-file button (next to Reload) asks for a name and creates an empty file in the folder the tab shows, then opens it in the editor. Type `notes/todo.md` to create missing folders on the way. It never overwrites anything: if the name is taken, it says so. It follows the session's sandbox mode like saving does, and is stricter in one way: in workspace-write mode it only creates inside the workspace (and any extra writable directories), never in temp areas.
+
 **Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
 
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
@@ -37,7 +40,7 @@ Nothing to configure.
 
 ## How it works
 
-The plugin adds two authenticated routes to the Harness, `GET /api/download.file` and `POST /api/save.file`, and registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check.
+The plugin adds authenticated routes to the Harness, `GET /api/download.file`, `POST /api/save.file` and `POST /api/create.file`, and registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check.
 
 ### The editor and the CDN
 
