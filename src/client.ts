@@ -105,6 +105,7 @@ window.__ModuleLoader__.load({
       'editor.noRoute':
         'Saving is unavailable: the Harness has no save route (restart the Harness to load the updated plugin).',
       'editor.retry': 'Try again',
+      'editor.info': '{size} · modified {modified}',
     };
     const zh = {
       'download.title': '下载文件',
@@ -130,6 +131,7 @@ window.__ModuleLoader__.load({
       'editor.gone': '文件已不存在。',
       'editor.noRoute': '无法保存：Harness 没有保存接口（请重启 Harness 以加载更新后的插件）。',
       'editor.retry': '重试',
+      'editor.info': '{size} · 修改于 {modified}',
     };
 
     const CSS = `
@@ -140,11 +142,13 @@ window.__ModuleLoader__.load({
 .dlf-split[data-error] .dlf-main{color:var(--dsw-alias-state-error-primary)}
 .dlf-split[data-size=large]{height:36px;border-color:var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md)}
 .dlf-split[data-size=large] .dlf-main{gap:6px;padding:6px 14px;font-size:14px}
-.dlf-ed{box-sizing:border-box;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:12px}
+.dlf-ed{container-type:inline-size;box-sizing:border-box;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:12px}
 .dlf-ed-bar{display:flex;align-items:center;gap:8px;flex:none;padding:6px 10px;border-bottom:.5px solid var(--dsw-alias-border-l2)}
 .dlf-ed-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .dlf-ed-dot{color:var(--dsw-alias-state-warn-primary)}
 .dlf-ed-spacer{flex:1}
+.dlf-ed-info{flex:none;color:var(--dsw-alias-label-secondary);white-space:nowrap;font-variant-numeric:tabular-nums}
+@container (max-width:420px){.dlf-ed-info{display:none}}
 .dlf-ed-status{color:var(--dsw-alias-label-secondary);white-space:nowrap}
 .dlf-ed-status[data-tone=error]{color:var(--dsw-alias-state-error-primary)}
 .dlf-ed-status[data-tone=ok]{color:var(--dsw-alias-state-success-primary)}
@@ -457,6 +461,49 @@ window.__ModuleLoader__.load({
 
     const formatBytes = (n: number) =>
       n >= 1024 * 1024 ? `${n / 1024 / 1024} MiB` : `${Math.round(n / 1024)} KiB`;
+
+    /** Human size for the editor header: exact bytes below 1 KiB, one decimal above. */
+    function formatSize(n: number): string {
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+      return `${(n / 1024 / 1024).toFixed(1)} MiB`;
+    }
+
+    /** Short local date-time, with the date only when it is not today. */
+    function formatModified(date: Date): string {
+      const now = new Date();
+      const sameDay = date.toDateString() === now.toDateString();
+      return sameDay
+        ? date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+        : date.toLocaleString(undefined, {
+            year: date.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+    }
+
+    interface FileInfo {
+      size?: number;
+      modified?: Date;
+    }
+
+    /** Size and modification time of a Host file, from the download route's headers. */
+    async function fetchFileInfo(absolutePath: string): Promise<FileInfo | undefined> {
+      try {
+        const response = await fetch(pathUrl(absolutePath), { method: 'HEAD' });
+        if (!response.ok) return undefined;
+        const length = Number(response.headers.get('content-length'));
+        const modified = new Date(response.headers.get('last-modified') ?? '');
+        return {
+          size: Number.isSafeInteger(length) && length >= 0 ? length : undefined,
+          modified: Number.isNaN(modified.getTime()) ? undefined : modified,
+        };
+      } catch {
+        return undefined;
+      }
+    }
 
     // ─────────────────── Monaco in a sandboxed iframe ───────────────────
 
@@ -826,7 +873,16 @@ window.__ModuleLoader__.load({
         options: { range?: { offset: number; length: number } },
         signal?: AbortSignal,
       ): Promise<
-        | { ok: true; value: { data: Uint8Array; eof: boolean; bytes?: number; version: string } }
+        | {
+            ok: true;
+            value: {
+              data: Uint8Array;
+              eof: boolean;
+              bytes?: number;
+              version: string;
+              absolutePath?: string;
+            };
+          }
         | { ok: false; error?: { code?: string } }
       >;
     }
@@ -852,7 +908,7 @@ window.__ModuleLoader__.load({
 
     type LoadError = 'tooLarge' | 'notText' | 'gone' | 'failed';
     type LoadedFile =
-      | { reason?: undefined; text: string; eol: string; version: string }
+      | { reason?: undefined; text: string; eol: string; version: string; absolutePath?: string }
       | { reason: LoadError };
     type SaveState =
       | { state: 'idle' | 'saving' | 'saved' | 'conflict' }
@@ -882,11 +938,11 @@ window.__ModuleLoader__.load({
         if (code === 'workspace-file/not-found') return { reason: 'gone' };
         return { reason: 'failed' };
       }
-      const { data, eof, bytes, version } = result.value;
+      const { data, eof, bytes, version, absolutePath } = result.value;
       if (!eof || (bytes ?? data.byteLength) > MAX_EDIT_BYTES) return { reason: 'tooLarge' };
       const decoded = decodeText(data);
       if (decoded.reason !== undefined) return { reason: decoded.reason };
-      return { text: decoded.text, eol: dominantEol(decoded.text), version };
+      return { text: decoded.text, eol: dominantEol(decoded.text), version, absolutePath };
     }
 
     function EditorBody({
@@ -914,6 +970,15 @@ window.__ModuleLoader__.load({
       const [dark, setDark] = React.useState(() => theme.getTheme().active.colorScheme === 'dark');
       const editor = React.useRef(null);
       const version = React.useRef('');
+      const [info, setInfo] = React.useState(undefined);
+      const absolutePath = React.useRef(undefined);
+      const refreshInfo = React.useCallback(() => {
+        const at = absolutePath.current;
+        if (at === undefined) return;
+        fetchFileInfo(at).then((next: FileInfo | undefined) => {
+          if (!tab.signal.aborted && absolutePath.current === at) setInfo(next);
+        });
+      }, [tab.signal]);
 
       const key = dirtyKey(props.sessionId, tab.id);
       const setDirty = React.useCallback(
@@ -949,8 +1014,10 @@ window.__ModuleLoader__.load({
           return undefined;
         }
         version.current = loaded.version;
+        absolutePath.current = loaded.absolutePath;
+        refreshInfo();
         return loaded;
-      }, [remote, sessionId, path, tab.signal]);
+      }, [remote, sessionId, path, tab.signal, refreshInfo]);
 
       React.useEffect(() => {
         let alive = true;
@@ -1006,6 +1073,7 @@ window.__ModuleLoader__.load({
             if (response.ok) {
               version.current = (await response.json()).version;
               editor.current.markSaved(token);
+              refreshInfo();
               setSave({ state: 'saved' });
               // Clicking the Save button took keyboard focus; hand it back to the text.
               editor.current.focus();
@@ -1029,7 +1097,7 @@ window.__ModuleLoader__.load({
             setSave({ state: 'error', key: 'editor.saveError' });
           }
         },
-        [save.state, sessionId, path],
+        [save.state, sessionId, path, refreshInfo],
       );
 
       const onSave = React.useCallback(() => {
@@ -1095,6 +1163,24 @@ window.__ModuleLoader__.load({
             dirty && h('span', { className: 'dlf-ed-dot' }, ' ●'),
           ),
           h('span', { className: 'dlf-ed-spacer' }),
+          info !== undefined &&
+            (info.size !== undefined || info.modified !== undefined) &&
+            h(
+              'span',
+              {
+                className: 'dlf-ed-info',
+                'data-dlf-info': '',
+                title: info.modified?.toLocaleString(),
+              },
+              info.size !== undefined && info.modified !== undefined
+                ? t('editor.info', {
+                    size: formatSize(info.size),
+                    modified: formatModified(info.modified),
+                  })
+                : info.size !== undefined
+                  ? formatSize(info.size)
+                  : formatModified(info.modified as Date),
+            ),
           status &&
             h(
               'span',

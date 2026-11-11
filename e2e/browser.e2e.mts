@@ -26,6 +26,7 @@ const REACT_UMD = process.env.REACT_UMD ?? require.resolve('react/umd/react.deve
 const REACT_DOM_UMD =
   process.env.REACT_DOM_UMD ?? require.resolve('react-dom/umd/react-dom.development.js');
 const { handleSave } = await import('../src/save-route.ts');
+const { handleDownload } = await import('../src/download-route.ts');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
 const versionOf = (p: string) => {
@@ -160,6 +161,27 @@ const server = http.createServer(async (req, res) => {
     } catch {
       return send(404, 'nope');
     }
+  }
+  if (url.pathname === '/api/download.file') {
+    const out = await handleDownload(
+      {
+        fs: {
+          processPathFromHostPath: (p) => p,
+          resolve: async (p) => ({ displayPath: p }),
+          stat: hostCtx.fs.stat,
+          readByteRange: async (t, { offset, length }) =>
+            readFileSync(t.displayPath!).subarray(offset, offset + length),
+        },
+        sandboxPolicy: hostCtx.sandboxPolicy,
+        workspaceFiles: hostCtx.workspaceFiles,
+        sessionQuery: { readEvent: async () => Promise.reject(new Error('unused')) },
+        workspaceChanges: { summary: () => undefined },
+      },
+      new Request(`http://x${url.pathname}${url.search}`, { method: req.method }),
+    );
+    res.writeHead(out.status, Object.fromEntries(out.headers));
+    res.end(Buffer.from(await out.arrayBuffer()));
+    return;
   }
   if (url.pathname === '/api/save.file') {
     const body = await new Promise<Buffer>((r) => {
@@ -322,6 +344,36 @@ await check('Save button saves; second edit after save uses the fresh version', 
     'dark theme applied',
   );
 });
+
+await check(
+  'editor header shows size and modification time, refreshed after save',
+  async (page) => {
+    const f = join(dir, 'info.txt');
+    writeFileSync(f, 'x'.repeat(2048));
+    // Plain-text editor (CDN blocked): fast and network-independent.
+    await page.route('https://cdn.jsdelivr.net/**', (route: any) => route.abort());
+    await open(page, f);
+    await page.waitForSelector('[data-dlf-info]', { timeout: 15000 });
+    const first = await page.textContent('[data-dlf-info]');
+    assert.match(first, /^editor\.info\{"size":"2\.0 KiB","modified":"[^"]+"\}$/);
+    await page.waitForSelector('textarea.dlf-ed-text', { timeout: 30000 });
+    await page.click('textarea.dlf-ed-text');
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('yy');
+    await page.click('.dlf-ed-bar .dlf-ed-btn');
+    await page.waitForFunction(
+      () =>
+        /"size":"2\.0 KiB"/.test(document.querySelector('[data-dlf-info]')?.textContent ?? '') &&
+        /editor\.saved/.test(document.querySelector('.dlf-ed-status')?.textContent ?? ''),
+      null,
+      { timeout: 8000 },
+    );
+    assert.equal(readFileSync(f, 'utf8').length, 2050);
+    await page.waitForFunction(
+      () => (document.querySelector('[data-dlf-info]')?.getAttribute('title') ?? '') !== '',
+    );
+  },
+);
 
 await check(
   'external change → 409 conflict banner; Overwrite then wins; file never clobbered silently',
