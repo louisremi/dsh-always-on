@@ -29,6 +29,7 @@ Nothing to configure.
 **Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
 
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
+- The header shows the file's size and when it was last modified, refreshed after each save.
 - If the file changed on disk after you opened it, saving is refused and you choose **Reload from disk**, **Overwrite**, or **Keep editing**. Nothing is overwritten silently.
 - Closing a tab (or the browser page) with unsaved changes asks for confirmation.
 - Line endings (LF/CRLF) and a leading UTF-8 byte-order mark are preserved.

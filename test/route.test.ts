@@ -96,6 +96,11 @@ test('streams a multi-chunk file by path with attachment headers', async () => {
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), bigBytes);
 });
 
+test('Last-Modified carries the Host file mtime when the file is on the Host', async () => {
+  const res = await get(fakeCtx(), q({ path: big }), 'HEAD');
+  assert.equal(res.headers.get('last-modified'), statSync(big).mtime.toUTCString());
+});
+
 test('HEAD returns headers and no body', async () => {
   const res = await get(fakeCtx(), q({ path: big }), 'HEAD');
   assert.equal(res.status, 200);
