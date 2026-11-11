@@ -22,9 +22,10 @@ export interface FsInfo {
   version?: string | undefined;
 }
 
+/** Mirrors the Harness's FsWriteIntent: a version guard always carries its version. */
 export interface WriteIntent {
   kind: 'replaceIfVersion';
-  version?: string | undefined;
+  version: string;
 }
 
 export interface WriteOutcome {
@@ -77,7 +78,7 @@ export interface WorkspaceFilesService {
     scope: { sessionId: string; workspaceRoot: string },
     path: string,
     signal?: AbortSignal,
-  ): Promise<{ absolutePath: string }>;
+  ): Promise<{ absolutePath: string; version?: string | undefined }>;
 }
 
 export interface SessionQueryService {

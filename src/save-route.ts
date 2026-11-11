@@ -110,9 +110,11 @@ export async function handleSave(ctx: SaveContext, request: Request): Promise<Re
     if (info === undefined) return fail(404);
     if (info.type !== 'file') return fail(403, 'not a regular file');
 
-    const intent: WriteIntent | undefined = input.force
-      ? undefined
-      : { kind: 'replaceIfVersion', version: input.expectedVersion };
+    // parse() guarantees a non-empty expectedVersion whenever force is false.
+    const intent: WriteIntent | undefined =
+      input.force || input.expectedVersion === undefined
+        ? undefined
+        : { kind: 'replaceIfVersion', version: input.expectedVersion };
     const outcome = await fs.writeText(target, input.content, intent, signal, policy);
     return json(200, { version: outcome.version, operation: outcome.operation });
   } catch (error) {

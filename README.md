@@ -62,7 +62,7 @@ The source is TypeScript; `npm run build` compiles it to `dist/` (it also runs a
 npm ci
 npm run check      # TypeScript typecheck of src, tests and e2e
 npm run build      # compile src/ to dist/
-npm test           # host route unit tests (no browser needed)
+npm test           # host route tests, incl. the real Harness fs + sandbox stack (no browser needed)
 npm run test:e2e   # opt-in: real headless Chromium + real Monaco from the CDN (builds first)
 ```
 
