@@ -48,6 +48,21 @@ To keep the package small (~69 kB), Monaco is **not bundled**. On the first Edit
 - **Your browser needs internet access to `cdn.jsdelivr.net`** (the Harness host does not). If it is unreachable or blocked, the editor falls back to a plain `<textarea>` with the same save, conflict and dirty-state behaviour, and says so.
 - jsDelivr sees your IP address and user agent when Monaco loads.
 
+## Security
+
+This plugin lets anyone who can use your Harness download and change files through the browser. It is built not to give them anything they could not already do there.
+
+- **Authenticated routes only.** Every route lives under `/api/` on the Harness's own connection layer (`ctx.connection.fetch`). Requests without a valid session cookie are rejected (401) before the plugin sees them, and only the Harness owner reaches the routes. Requests from foreign hosts or other sites are rejected too: cross-site `Sec-Fetch-Site` or a foreign `Origin` gets a 403. Nothing is served from a plain, unauthenticated web route.
+- **Writes follow the session's sandbox mode.** Saves go through the Harness filesystem layer with the sandbox policy of the session the file belongs to. In `read-only` mode nothing is written. In `workspace-write` mode the target must be inside the session's writable roots (its workspace, any extra writable directories, the temp areas). Only `danger-full-access` allows writes anywhere, exactly as for the agent's own file tools. The plugin never widens a session's mode. For a session that is not running, it uses that session's saved workspace and the deployment's default mode.
+- **Writes are atomic and checked.** A save writes a temporary file and renames it over the target, so a crash or a full disk never leaves a half-written file. It is refused if the file changed on disk since the editor read it, unless you choose **Overwrite**.
+- **No silent corruption.** Binary files and invalid UTF-8 are refused, not decoded with replacement characters. Line endings and a byte-order mark are preserved.
+- **Downloads** are limited to regular files the Harness filesystem can reach. They are sent as `application/octet-stream` attachments with `X-Content-Type-Options: nosniff`, so the browser never renders them inline.
+- **The CDN editor is isolated.** See [The editor and the CDN](#the-editor-and-the-cdn).
+
+**What it does not protect against:** anyone you let into your Harness can already run shell commands and agent tools, which are far more powerful than these buttons. Keep the Harness behind a trusted boundary: localhost, a VPN or tailnet, or an authenticated reverse proxy. Mount only the directories you want it to touch, and rely on version control or backups for recovery.
+
+Found a security problem? Please [open an issue](https://github.com/louisremi/dsh-always-on/issues), or contact the maintainer privately for anything sensitive.
+
 ## Limitations
 
 - Download: single files only; folders are not downloadable.
