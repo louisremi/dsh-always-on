@@ -3,3 +3,10 @@ dist
 *.tgz
 tmp/
 test/.fixtures/
+
+# Local-only agent skills (Matt Pocock's skills, installed from
+# github.com/mattpocock/skills). .agents/skills holds symlinks into the
+# .scratch clone, so both stay out of the repo and out of everyone else's
+# sessions. Re-install per workspace; never commit.
+.scratch/
+.agents/

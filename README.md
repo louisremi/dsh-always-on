@@ -3,7 +3,6 @@
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin for running your Harness in a container, where it has **no access to your local file system**.
 
 Run the Harness in a Docker container — on a NAS, a server, anywhere — and it lives on a machine of its own: the stock "show file location" and "Open in app" buttons would have to reach a desktop that isn't there, and nothing inside the container can read or write your computer's files. Your browser is the only connection between you and your files. This plugin makes it enough, replacing the dead buttons with things that work through it:
-
 - **Download file** buttons that save a file to your computer.
 - **Show files**, which opens the sidebar file explorer.
 - **New file** and **New folder**, in the Files tab, and **Rename/move** and **Delete** for the file you are previewing.
@@ -32,14 +31,12 @@ Nothing to configure.
 **New folder.** The button next to New file creates a folder (`docs/drafts` creates both levels) in the folder the Files tab shows. Same rules: it never replaces anything and follows the sandbox mode. Since the Harness filesystem layer has no "make directory" operation, the plugin calls `mkdir` itself, after the same sandbox check. That is only possible when the Harness files live on the Harness host, which is also what downloads need.
 
 **Rename / move and Delete.** A file open in the sidebar preview gets two more buttons next to Download:
-
 - **Rename or move** asks for a new name, with the stem pre-selected. A plain name renames in place, `folder/name` moves it into a (possibly new) sub-folder, and an absolute path moves it there. It never replaces an existing file: if the name is taken, it says so. Tabs showing the old name are closed and the file reopens under its new name.
 - **Delete** asks for confirmation, deletes the file and closes its tabs. There is no undo.
 - Both are refused while an editor tab has unsaved changes to that file, and both follow the sandbox mode like New folder.
 - They only act on regular files. Symlinks are refused, not followed. Folders cannot be renamed or deleted from the UI yet.
 
 **Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
-
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
 - The header shows the file's size and when it was last modified, refreshed after each save.
 - If the file changed on disk after you opened it, saving is refused and you choose **Reload from disk**, **Overwrite**, or **Keep editing**. Nothing is overwritten silently.
@@ -55,7 +52,6 @@ The plugin adds authenticated routes to the Harness, `GET /api/download.file`, `
 ### The editor and the CDN
 
 To keep the package small (~69 kB), Monaco is **not bundled**. On the first Edit it is loaded from [jsDelivr](https://www.jsdelivr.com/) at a pinned version (`monaco-editor@0.52.2`).
-
 - It runs in a **sandboxed iframe** (`sandbox="allow-scripts"`, no `allow-same-origin`) with a Content-Security-Policy that only permits the CDN. The CDN's code therefore cannot read the Harness page, your session cookie, local storage, or call the Harness API; it only exchanges messages with the editor wrapper.
 - The loader script is checked with Subresource Integrity (SRI). Files the loader then pulls in are not individually pinned by hash, which is why the isolation above matters.
 - **Your browser needs internet access to `cdn.jsdelivr.net`** (the Harness host does not). If it is unreachable or blocked, the editor falls back to a plain `<textarea>` with the same save, conflict and dirty-state behaviour, and says so.
@@ -64,7 +60,6 @@ To keep the package small (~69 kB), Monaco is **not bundled**. On the first Edit
 ## Security
 
 This plugin lets anyone who can use your Harness download and change files through the browser. It is built not to give them anything they could not already do there.
-
 - **Authenticated routes only.** Every route lives under `/api/` on the Harness's own connection layer (`ctx.connection.fetch`). Requests without a valid session cookie are rejected (401) before the plugin sees them, and only the Harness owner reaches the routes. Requests from foreign hosts or other sites are rejected too: cross-site `Sec-Fetch-Site` or a foreign `Origin` gets a 403. Nothing is served from a plain, unauthenticated web route.
 - **Writes follow the session's sandbox mode.** Saves go through the Harness filesystem layer with the sandbox policy of the session the file belongs to. In `read-only` mode nothing is written. In `workspace-write` mode the target must be inside the session's writable roots (its workspace, any extra writable directories, the temp areas). Only `danger-full-access` allows writes anywhere, exactly as for the agent's own file tools. The plugin never widens a session's mode. For a session that is not running, it uses that session's saved workspace and the deployment's default mode.
 - **Creating, renaming and deleting are fenced by the plugin itself.** Before New file, New folder, Rename/move or Delete touches anything, the plugin checks the canonical path (symlinks resolved) against the session's policy. This holds even on a Harness filesystem backend that does not enforce the policy. In `workspace-write` mode the check is stricter than for the agent: only the workspace and its extra writable directories count, never temp areas, and the workspace root itself can't be renamed or deleted. These actions never replace an existing entry. Rename and Delete act only on regular files: symlinks are refused rather than followed, and folders are never deleted.
@@ -107,7 +102,6 @@ dsh plugin --profile web remove @louisremi/dsh-always-on
 ## Releasing
 
 Changes land on `main` as pull requests, so each GitHub Release can describe itself: create a release with an empty description and the **Release notes** workflow fills it from everything merged since the previous release (`.github/release.yml` controls the categorization).
-
 1. Bump `version` in `package.json` and push (via PR).
 2. Publish a GitHub Release whose tag matches the version: `gh release create vX.Y.Z`.
 3. The **Publish to npm** workflow then runs on release publish: it checks the tag against `package.json`, lints, type-checks, tests, and publishes to npm with provenance through [trusted publishing](https://docs.npmjs.com/trusted-publishers) — no tokens stored in the repo. If the version is already in the registry (the very first publish of a package has to be done manually, since trusted publishing is configured on the package page), the workflow skips the publish.
