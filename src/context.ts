@@ -8,12 +8,16 @@
 export interface SandboxPolicy {
   mode: string;
   workspaceRoot: string;
+  /** Extra directories `workspace-write` may write under, besides the workspace. */
+  additionalWritableRoots?: readonly string[] | undefined;
   sessionId?: string | undefined;
 }
 
 /** A resolved Host path (the value ctx.fs.resolve hands back). */
 export interface FsTarget {
   displayPath?: string | undefined;
+  /** The backend's canonical identity; a Host path for the local backends. */
+  targetKey?: string | undefined;
 }
 
 export interface FsInfo {
@@ -22,10 +26,10 @@ export interface FsInfo {
   version?: string | undefined;
 }
 
-export interface WriteIntent {
-  kind: 'replaceIfVersion';
-  version?: string | undefined;
-}
+/** Mirrors the Harness's FsWriteIntent: a version guard always carries its version. */
+export type WriteIntent =
+  | { kind: 'replaceIfVersion'; version: string }
+  | { kind: 'createIfAbsent' };
 
 export interface WriteOutcome {
   version: string;
@@ -77,7 +81,7 @@ export interface WorkspaceFilesService {
     scope: { sessionId: string; workspaceRoot: string },
     path: string,
     signal?: AbortSignal,
-  ): Promise<{ absolutePath: string }>;
+  ): Promise<{ absolutePath: string; version?: string | undefined }>;
 }
 
 export interface SessionQueryService {

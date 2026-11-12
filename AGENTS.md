@@ -1,6 +1,6 @@
 # dsh-always-on
 
-A DeepSeek Harness plugin for harnesses running in a container with no access to your local file system: download buttons instead of "Show file location", a "Show files" shortcut, and an in-sidebar Monaco file editor, all through the browser.
+A DeepSeek Harness plugin for harnesses running in a container with no access to your local file system: download buttons instead of "Show file location", a "Show files" shortcut, New file / New folder / Rename / Delete, and an in-sidebar Monaco file editor, all through the browser.
 
 ## Development
 

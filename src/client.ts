@@ -53,6 +53,10 @@ window.__ModuleLoader__.load({
     const NS = 'always-on';
     const ROUTE = 'api/download.file';
     const SAVE_ROUTE = 'api/save.file';
+    const CREATE_FILE_ROUTE = 'api/create.file';
+    const CREATE_FOLDER_ROUTE = 'api/create.folder';
+    const RENAME_FILE_ROUTE = 'api/rename.file';
+    const DELETE_FILE_ROUTE = 'api/delete.file';
     const STOCK_ID = 'open-in-app';
     const ERROR_MS = 4000;
 
@@ -105,6 +109,28 @@ window.__ModuleLoader__.load({
       'editor.noRoute':
         'Saving is unavailable: the Harness has no save route (restart the Harness to load the updated plugin).',
       'editor.retry': 'Try again',
+      'editor.info': '{size} · modified {modified}',
+      'create.file': 'New file',
+      'create.fileHint': 'Use / to create it in a new folder, e.g. notes/todo.md',
+      'create.folder': 'New folder',
+      'create.folderHint': 'Use / to create nested folders, e.g. docs/drafts',
+      'create.create': 'Create',
+      'create.cancel': 'Cancel',
+      'create.exists': 'Something with that name already exists here.',
+      'create.invalid': 'Enter a name without \\, control characters, or . and .. parts.',
+      'create.denied': "This is not permitted in this session's sandbox mode.",
+      'create.failed': 'Could not create it. Try again.',
+      'rename.title': 'Rename or move',
+      'rename.hint': 'Use / to move it into a folder, or type an absolute path.',
+      'rename.confirm': 'Rename',
+      'rename.missing': 'The file no longer exists.',
+      'create.noFolder': 'That folder no longer exists.',
+      'mutation.noSession': 'This session no longer exists.',
+      'mutation.unmapped': 'Not possible here: this file is not on the Harness host.',
+      'delete.title': 'Delete file',
+      'delete.question': 'Delete {name}? This cannot be undone.',
+      'delete.confirm': 'Delete',
+      'entry.dirty': 'This file has unsaved edits in the editor. Save or discard them first.',
     };
     const zh = {
       'download.title': '下载文件',
@@ -130,6 +156,28 @@ window.__ModuleLoader__.load({
       'editor.gone': '文件已不存在。',
       'editor.noRoute': '无法保存：Harness 没有保存接口（请重启 Harness 以加载更新后的插件）。',
       'editor.retry': '重试',
+      'editor.info': '{size} · 修改于 {modified}',
+      'create.file': '新建文件',
+      'create.fileHint': '可用 / 在新文件夹中创建，例如 notes/todo.md',
+      'create.folder': '新建文件夹',
+      'create.folderHint': '可用 / 创建多级文件夹，例如 docs/drafts',
+      'create.create': '创建',
+      'create.cancel': '取消',
+      'create.exists': '此处已存在同名项目。',
+      'create.invalid': '名称不能包含 \\、控制字符，或 . 和 .. 路径段。',
+      'create.denied': '当前会话的沙箱模式不允许此操作。',
+      'create.failed': '无法创建，请重试。',
+      'rename.title': '重命名或移动',
+      'rename.hint': '可用 / 移动到文件夹中，或输入绝对路径。',
+      'rename.confirm': '重命名',
+      'rename.missing': '文件已不存在。',
+      'create.noFolder': '该文件夹已不存在。',
+      'mutation.noSession': '此会话已不存在。',
+      'mutation.unmapped': '此处无法操作：该文件不在 Harness 主机上。',
+      'delete.title': '删除文件',
+      'delete.question': '要删除 {name} 吗？此操作无法撤销。',
+      'delete.confirm': '删除',
+      'entry.dirty': '此文件在编辑器中有未保存的修改，请先保存或放弃。',
     };
 
     const CSS = `
@@ -140,11 +188,13 @@ window.__ModuleLoader__.load({
 .dlf-split[data-error] .dlf-main{color:var(--dsw-alias-state-error-primary)}
 .dlf-split[data-size=large]{height:36px;border-color:var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md)}
 .dlf-split[data-size=large] .dlf-main{gap:6px;padding:6px 14px;font-size:14px}
-.dlf-ed{box-sizing:border-box;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:12px}
+.dlf-ed{container-type:inline-size;box-sizing:border-box;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:12px}
 .dlf-ed-bar{display:flex;align-items:center;gap:8px;flex:none;padding:6px 10px;border-bottom:.5px solid var(--dsw-alias-border-l2)}
 .dlf-ed-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .dlf-ed-dot{color:var(--dsw-alias-state-warn-primary)}
 .dlf-ed-spacer{flex:1}
+.dlf-ed-info{flex:none;color:var(--dsw-alias-label-secondary);white-space:nowrap;font-variant-numeric:tabular-nums}
+@container (max-width:420px){.dlf-ed-info{display:none}}
 .dlf-ed-status{color:var(--dsw-alias-label-secondary);white-space:nowrap}
 .dlf-ed-status[data-tone=error]{color:var(--dsw-alias-state-error-primary)}
 .dlf-ed-status[data-tone=ok]{color:var(--dsw-alias-state-success-primary)}
@@ -158,6 +208,19 @@ window.__ModuleLoader__.load({
 .dlf-ed-text{position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;margin:0;padding:8px 10px;resize:none;border:0;outline:0;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;tab-size:4;white-space:pre}
 .dlf-ed-titleIcon{flex:none}
 .dlf-ed-msg{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:16px 12px;color:var(--dsw-alias-label-secondary)}
+.dlf-tool{width:28px;height:28px;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:6px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);line-height:1;cursor:pointer}
+.dlf-tool:hover,.dlf-tool:focus-visible{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.dlf-dlg-back{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:flex-start;justify-content:center;padding-top:18vh;background:rgba(0,0,0,.28)}
+.dlf-dlg{box-sizing:border-box;width:min(420px,calc(100vw - 32px));display:flex;flex-direction:column;gap:10px;padding:16px;border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg,10px);background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base));color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:13px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.dlf-dlg-title{margin:0;font-size:14px;font-weight:600}
+.dlf-dlg-where{color:var(--dsw-alias-label-secondary);font-size:12px;overflow-wrap:anywhere}
+.dlf-dlg-input{box-sizing:border-box;width:100%;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-base);color:inherit;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;outline:0}
+.dlf-dlg-input:focus{border-color:var(--dsw-alias-label-secondary)}
+.dlf-dlg-hint{color:var(--dsw-alias-label-secondary);font-size:12px}
+.dlf-dlg-error{color:var(--dsw-alias-state-error-primary);font-size:12px}
+.dlf-dlg-actions{display:flex;justify-content:flex-end;gap:8px}
+.dlf-dlg .dlf-ed-btn[data-primary]{background:var(--dsw-alias-interactive-bg-hover)}
+.dlf-dlg .dlf-ed-btn[data-danger]{color:var(--dsw-alias-state-error-primary)}
 `;
 
     // ───────────────────────────── icons ─────────────────────────────
@@ -210,12 +273,63 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function NewFileIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', {
+          d: 'M9 1.5H3.5C2.948 1.5 2.5 1.948 2.5 2.5V13.5C2.5 14.052 2.948 14.5 3.5 14.5H12.5C13.052 14.5 13.5 14.052 13.5 13.5V6L9 1.5Z',
+          stroke: 'currentColor',
+        }),
+        h('path', { d: 'M9 1.5V6H13.5', stroke: 'currentColor' }),
+        h('path', { d: 'M8 8.5V12.5M6 10.5H10', stroke: 'currentColor' }),
+      );
+    }
+
+    function NewFolderIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', {
+          d: 'M1.5 3.5C1.5 2.948 1.948 2.5 2.5 2.5H6L7.5 4.25H13.5C14.052 4.25 14.5 4.698 14.5 5.25V12.5C14.5 13.052 14.052 13.5 13.5 13.5H2.5C1.948 13.5 1.5 13.052 1.5 12.5V3.5Z',
+          stroke: 'currentColor',
+        }),
+        h('path', { d: 'M8 6.5V11M5.75 8.75H10.25', stroke: 'currentColor' }),
+      );
+    }
+
+    function RenameIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', { d: 'M2 5.5H14M2 10.5H9', stroke: 'currentColor' }),
+        h('path', { d: 'M11.5 8.5L14 10.5L11.5 12.5', stroke: 'currentColor' }),
+      );
+    }
+
+    function DeleteIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', { d: 'M2.5 4H13.5M6 4V2.5H10V4', stroke: 'currentColor' }),
+        h('path', {
+          d: 'M3.75 4L4.5 13.5C4.5 13.776 4.724 14 5 14H11C11.276 14 11.5 13.776 11.5 13.5L12.25 4',
+          stroke: 'currentColor',
+        }),
+        h('path', { d: 'M6.75 6.5V11.5M9.25 6.5V11.5', stroke: 'currentColor' }),
+      );
+    }
+
     // ─────────────────────────── file addresses ───────────────────────────
 
     // Sidebar surface the buttons drive: tab switching, resource tabs, close guards.
     interface SidebarRight {
       openTab(tab: string): unknown;
-      openResource(address: string, options: { kind: string }): unknown;
+      /** Open tab records of a session (present on the stock controller). */
+      tabsIn?(sessionId: string): readonly { id: string; kind: string; contentId: string }[];
+      /** Close one tab of a session, running its close handler. */
+      closeIn?(sessionId: string, tabId: string): void;
+      openResource(address: string, options: { kind?: string }): unknown;
       registerCloseHandler(
         kind: string,
         handler: (sessionId: string, tab: { id: string; title: string }) => void,
@@ -427,6 +541,415 @@ window.__ModuleLoader__.load({
       return to.href;
     }
 
+    // ───────────────────────── dialogs & mutations ─────────────────────────
+
+    /** Same rule as the Host's nameSegments() in src/create-route.ts. */
+    function validName(name: string): boolean {
+      if (name.length === 0 || name.length > 1024) return false;
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+      if (/[\u0000-\u001f\u007f\\]/.test(name)) return false;
+      return name
+        .split('/')
+        .every((s) => s.length > 0 && s !== '.' && s !== '..' && s.trim() === s);
+    }
+
+    /**
+     * Message key for a failed mutation response. A 404 means a missing session
+     * (the Host says so in `error`), else the folder a create targets or the
+     * file a rename/delete acts on.
+     */
+    function mutationErrorKey(
+      response: { status: number; body: any },
+      target: 'folder' | 'file',
+    ): string {
+      const { status, body } = response;
+      if (status === 409) return 'create.exists';
+      if (status === 404) {
+        if (body?.error === 'session not found') return 'mutation.noSession';
+        return target === 'folder' ? 'create.noFolder' : 'rename.missing';
+      }
+      if (status === 422) return 'mutation.unmapped';
+      if (status === 400) return 'create.invalid';
+      if (status === 403) return 'create.denied';
+      return 'create.failed';
+    }
+
+    /** POST a JSON body to one of the plugin's routes; returns the status and parsed body. */
+    async function postJson(
+      route: string,
+      body: unknown,
+    ): Promise<{ status: number; ok: boolean; body: any }> {
+      const response = await fetch(new URL(route, document.baseURI).href, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const parsed = await response.json().catch(() => ({}));
+      return { status: response.status, ok: response.ok, body: parsed };
+    }
+
+    let ReactDOM: any;
+    try {
+      ReactDOM = require('react-dom');
+    } catch {
+      /* rendered inline instead of in a portal */
+    }
+
+    /**
+     * A small modal asking for a name (or just a confirmation when `initial`
+     * is undefined). `submit` returns an error message key to keep the dialog
+     * open with that message, or undefined to close it.
+     */
+    function NameDialog({
+      title,
+      where,
+      hint,
+      initial,
+      confirm,
+      danger,
+      t,
+      submit,
+      onClose,
+    }: {
+      title: string;
+      where?: string | undefined;
+      hint?: string | undefined;
+      initial?: string | undefined;
+      confirm: string;
+      danger?: boolean;
+      t: Translate;
+      submit: (name: string) => Promise<string | undefined>;
+      onClose: () => void;
+    }) {
+      const [value, setValue] = React.useState(initial ?? '');
+      const [error, setError] = React.useState(undefined);
+      const [busy, setBusy] = React.useState(false);
+      const input = React.useRef(null);
+      const asksName = initial !== undefined;
+      React.useEffect(() => {
+        const el = input.current;
+        if (el === null) return;
+        el.focus();
+        // Select the stem, not the extension, like file managers do.
+        const dot = el.value.lastIndexOf('.');
+        el.setSelectionRange(0, dot > 0 ? dot : el.value.length);
+      }, []);
+      React.useEffect(() => {
+        const onKey = (event: KeyboardEvent) => {
+          if (event.key === 'Escape' && !busy) onClose();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, [busy, onClose]);
+      const name = value.trim();
+      const invalid = asksName && name.length > 0 && !validName(name);
+      const run = async () => {
+        if (busy || (asksName && (name.length === 0 || invalid))) return;
+        setBusy(true);
+        setError(undefined);
+        let key: string | undefined;
+        try {
+          key = await submit(name);
+        } catch {
+          key = 'create.failed';
+        }
+        setBusy(false);
+        if (key === undefined) onClose();
+        else setError(key);
+      };
+      const dialog = h(
+        'div',
+        {
+          className: 'dlf-dlg-back',
+          onMouseDown: (event: MouseEvent) => {
+            if (event.target === event.currentTarget && !busy) onClose();
+          },
+        },
+        h(
+          'form',
+          {
+            className: 'dlf-dlg',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': title,
+            'data-dlf-dialog': '',
+            onSubmit: (event: Event) => {
+              event.preventDefault();
+              run();
+            },
+          },
+          h('h2', { className: 'dlf-dlg-title' }, title),
+          where && h('div', { className: 'dlf-dlg-where' }, where),
+          asksName &&
+            h('input', {
+              ref: input,
+              className: 'dlf-dlg-input',
+              value,
+              spellCheck: false,
+              autoComplete: 'off',
+              'aria-label': title,
+              'aria-invalid': invalid || error !== undefined ? 'true' : undefined,
+              onChange: (event: any) => {
+                setValue(event.target.value);
+                setError(undefined);
+              },
+            }),
+          (invalid || error !== undefined) &&
+            h(
+              'div',
+              { className: 'dlf-dlg-error', role: 'alert' },
+              t(invalid ? 'create.invalid' : (error as string)),
+            ),
+          hint && !invalid && error === undefined && h('div', { className: 'dlf-dlg-hint' }, hint),
+          h(
+            'div',
+            { className: 'dlf-dlg-actions' },
+            h(
+              'button',
+              { type: 'button', className: 'dlf-ed-btn', disabled: busy, onClick: onClose },
+              t('create.cancel'),
+            ),
+            h(
+              'button',
+              {
+                type: 'submit',
+                className: 'dlf-ed-btn',
+                'data-primary': danger ? undefined : '',
+                'data-danger': danger ? '' : undefined,
+                disabled: busy || (asksName && (name.length === 0 || invalid)),
+              },
+              confirm,
+            ),
+          ),
+        ),
+      );
+      return ReactDOM?.createPortal ? ReactDOM.createPortal(dialog, document.body) : dialog;
+    }
+
+    /**
+     * "New file" / "New folder" in the Files tab toolbar. A new file opens in
+     * the editor; a new folder simply appears in the tree (it watches the disk).
+     */
+    function CreateButton({
+      kind,
+      sessionId,
+      absolutePath,
+      sidebarRight,
+      t,
+    }: {
+      kind: 'file' | 'folder';
+      sessionId?: unknown;
+      absolutePath?: unknown;
+      sidebarRight: SidebarRight;
+      t: Translate;
+    }) {
+      const [open, setOpen] = React.useState(false);
+      if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
+      const label = t(kind === 'file' ? 'create.file' : 'create.folder');
+      return h(
+        React.Fragment,
+        null,
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dlf-tool',
+            title: label,
+            'aria-label': label,
+            [kind === 'file' ? 'data-new-file' : 'data-new-folder']: '',
+            onClick: () => setOpen(true),
+          },
+          h(kind === 'file' ? NewFileIcon : NewFolderIcon, { size: 16 }),
+        ),
+        open &&
+          h(NameDialog, {
+            title: label,
+            where: absolutePath,
+            hint: t(kind === 'file' ? 'create.fileHint' : 'create.folderHint'),
+            initial: '',
+            confirm: t('create.create'),
+            t,
+            onClose: () => setOpen(false),
+            submit: async (name: string) => {
+              const res = await postJson(
+                kind === 'file' ? CREATE_FILE_ROUTE : CREATE_FOLDER_ROUTE,
+                {
+                  sessionId,
+                  directory: absolutePath,
+                  name,
+                },
+              );
+              if (!res.ok) return mutationErrorKey(res, 'folder');
+              if (kind === 'file') {
+                try {
+                  sidebarRight.openResource(sessionFileAddress(sessionId, res.body.absolutePath), {
+                    kind: EDITOR_KIND,
+                  });
+                } catch (error) {
+                  console.warn('open new file rejected:', error);
+                }
+              }
+              return undefined;
+            },
+          }),
+      );
+    }
+
+    /**
+     * Open sidebar tabs (preview or editor) showing a Host file. Tab addresses
+     * hold an absolute path or one relative to the session's workspace, which
+     * the browser does not know. A relative path whose suffix fits is resolved
+     * by the Host (`workspaceFiles.stat`), so `a.txt` never matches
+     * `/ws/sub/a.txt`. Only on a Harness without that call does the suffix
+     * alone decide, erring towards "this file".
+     */
+    async function tabsShowing(
+      sidebarRight: SidebarRight,
+      remote: { workspaceFiles: RemoteWorkspaceFiles },
+      sessionId: string,
+      absolutePath: string,
+    ) {
+      let tabs: readonly { id: string; kind: string; contentId: string }[] = [];
+      try {
+        tabs = sidebarRight.tabsIn?.(sessionId) ?? [];
+      } catch {
+        return [];
+      }
+      const shows = async (path: string) => {
+        if (path.startsWith('/')) return path === absolutePath;
+        if (!absolutePath.endsWith(`/${path}`)) return false;
+        const stat = remote.workspaceFiles.stat;
+        if (typeof stat !== 'function') return true;
+        try {
+          const result = await stat.call(remote.workspaceFiles, sessionId, path);
+          return result.ok && result.value.absolutePath === absolutePath;
+        } catch {
+          return false;
+        }
+      };
+      const matches = await Promise.all(
+        tabs.map((tab) => {
+          const path = parseFileAddress(tab.contentId)?.path;
+          return path === undefined ? false : shows(path);
+        }),
+      );
+      return tabs.filter((_tab, i) => matches[i]);
+    }
+
+    /** Close the given tabs; best effort (a newer Harness may lack closeIn). */
+    function closeTabs(sidebarRight: SidebarRight, sessionId: string, ids: string[]) {
+      for (const id of ids) {
+        try {
+          sidebarRight.closeIn?.(sessionId, id);
+        } catch (error) {
+          console.warn('close tab rejected:', error);
+        }
+      }
+    }
+
+    /** Rename/move and Delete for the file shown in the sidebar preview. */
+    function EntryButtons({
+      sessionId,
+      absolutePath,
+      sidebarRight,
+      remote,
+      t,
+    }: {
+      sessionId?: unknown;
+      absolutePath?: unknown;
+      sidebarRight: SidebarRight;
+      remote: { workspaceFiles: RemoteWorkspaceFiles };
+      t: Translate;
+    }) {
+      const [open, setOpen] = React.useState(undefined);
+      if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
+      const name = baseName(absolutePath);
+      /** This file's open tabs, and the error key when one holds unsaved edits. */
+      const fileTabs = async () => {
+        const tabs = await tabsShowing(sidebarRight, remote, sessionId, absolutePath);
+        const dirty = tabs.some((tab) => dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)));
+        return { ids: tabs.map((tab) => tab.id), blocked: dirty ? 'entry.dirty' : undefined };
+      };
+      const button = (kind: 'rename' | 'delete') => {
+        const label = t(kind === 'rename' ? 'rename.title' : 'delete.title');
+        return h(
+          'div',
+          {
+            className: 'dlf-split',
+            'data-size': 'compact',
+            [kind === 'rename' ? 'data-rename-file' : 'data-delete-file']: '',
+          },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dlf-main',
+              title: label,
+              'aria-label': label,
+              onClick: () => setOpen(kind),
+            },
+            h(kind === 'rename' ? RenameIcon : DeleteIcon, { size: 13 }),
+          ),
+        );
+      };
+      return h(
+        React.Fragment,
+        null,
+        button('rename'),
+        button('delete'),
+        open === 'rename' &&
+          h(NameDialog, {
+            title: t('rename.title'),
+            where: absolutePath,
+            hint: t('rename.hint'),
+            initial: name,
+            confirm: t('rename.confirm'),
+            t,
+            onClose: () => setOpen(undefined),
+            submit: async (destination: string) => {
+              const { ids: before, blocked } = await fileTabs();
+              if (blocked !== undefined) return blocked;
+              const res = await postJson(RENAME_FILE_ROUTE, {
+                sessionId,
+                path: absolutePath,
+                destination,
+              });
+              if (!res.ok) return mutationErrorKey(res, 'file');
+              if (res.body.absolutePath !== absolutePath) {
+                closeTabs(sidebarRight, sessionId, before);
+                try {
+                  sidebarRight.openResource(
+                    sessionFileAddress(sessionId, res.body.absolutePath),
+                    {},
+                  );
+                } catch (error) {
+                  console.warn('open renamed file rejected:', error);
+                }
+              }
+              return undefined;
+            },
+          }),
+        open === 'delete' &&
+          h(NameDialog, {
+            title: t('delete.title'),
+            where: absolutePath,
+            hint: t('delete.question', { name }),
+            confirm: t('delete.confirm'),
+            danger: true,
+            t,
+            onClose: () => setOpen(undefined),
+            submit: async () => {
+              const { ids: before, blocked } = await fileTabs();
+              if (blocked !== undefined) return blocked;
+              const res = await postJson(DELETE_FILE_ROUTE, { sessionId, path: absolutePath });
+              if (!res.ok) return mutationErrorKey(res, 'file');
+              closeTabs(sidebarRight, sessionId, before);
+              return undefined;
+            },
+          }),
+      );
+    }
+
     // ─────────────────────── text helpers (pure) ───────────────────────
 
     /** Dominant line ending of `text`. */
@@ -457,6 +980,49 @@ window.__ModuleLoader__.load({
 
     const formatBytes = (n: number) =>
       n >= 1024 * 1024 ? `${n / 1024 / 1024} MiB` : `${Math.round(n / 1024)} KiB`;
+
+    /** Human size for the editor header: exact bytes below 1 KiB, one decimal above. */
+    function formatSize(n: number): string {
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+      return `${(n / 1024 / 1024).toFixed(1)} MiB`;
+    }
+
+    /** Short local date-time, with the date only when it is not today. */
+    function formatModified(date: Date): string {
+      const now = new Date();
+      const sameDay = date.toDateString() === now.toDateString();
+      return sameDay
+        ? date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+        : date.toLocaleString(undefined, {
+            year: date.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+    }
+
+    interface FileInfo {
+      size?: number;
+      modified?: Date;
+    }
+
+    /** Size and modification time of a Host file, from the download route's headers. */
+    async function fetchFileInfo(absolutePath: string): Promise<FileInfo | undefined> {
+      try {
+        const response = await fetch(pathUrl(absolutePath), { method: 'HEAD' });
+        if (!response.ok) return undefined;
+        const length = Number(response.headers.get('content-length'));
+        const modified = new Date(response.headers.get('last-modified') ?? '');
+        return {
+          size: Number.isSafeInteger(length) && length >= 0 ? length : undefined,
+          modified: Number.isNaN(modified.getTime()) ? undefined : modified,
+        };
+      } catch {
+        return undefined;
+      }
+    }
 
     // ─────────────────── Monaco in a sandboxed iframe ───────────────────
 
@@ -820,13 +1386,28 @@ window.__ModuleLoader__.load({
     };
 
     interface RemoteWorkspaceFiles {
+      /** Absolute path of a workspace file; optional on older Harnesses. */
+      stat?(
+        sessionId: string,
+        path: string,
+        signal?: AbortSignal,
+      ): Promise<{ ok: true; value: { absolutePath: string } } | { ok: false }>;
       readBytes(
         sessionId: string,
         path: string,
         options: { range?: { offset: number; length: number } },
         signal?: AbortSignal,
       ): Promise<
-        | { ok: true; value: { data: Uint8Array; eof: boolean; bytes?: number; version: string } }
+        | {
+            ok: true;
+            value: {
+              data: Uint8Array;
+              eof: boolean;
+              bytes?: number;
+              version: string;
+              absolutePath?: string;
+            };
+          }
         | { ok: false; error?: { code?: string } }
       >;
     }
@@ -852,7 +1433,7 @@ window.__ModuleLoader__.load({
 
     type LoadError = 'tooLarge' | 'notText' | 'gone' | 'failed';
     type LoadedFile =
-      | { reason?: undefined; text: string; eol: string; version: string }
+      | { reason?: undefined; text: string; eol: string; version: string; absolutePath?: string }
       | { reason: LoadError };
     type SaveState =
       | { state: 'idle' | 'saving' | 'saved' | 'conflict' }
@@ -882,11 +1463,11 @@ window.__ModuleLoader__.load({
         if (code === 'workspace-file/not-found') return { reason: 'gone' };
         return { reason: 'failed' };
       }
-      const { data, eof, bytes, version } = result.value;
+      const { data, eof, bytes, version, absolutePath } = result.value;
       if (!eof || (bytes ?? data.byteLength) > MAX_EDIT_BYTES) return { reason: 'tooLarge' };
       const decoded = decodeText(data);
       if (decoded.reason !== undefined) return { reason: decoded.reason };
-      return { text: decoded.text, eol: dominantEol(decoded.text), version };
+      return { text: decoded.text, eol: dominantEol(decoded.text), version, absolutePath };
     }
 
     function EditorBody({
@@ -914,6 +1495,15 @@ window.__ModuleLoader__.load({
       const [dark, setDark] = React.useState(() => theme.getTheme().active.colorScheme === 'dark');
       const editor = React.useRef(null);
       const version = React.useRef('');
+      const [info, setInfo] = React.useState(undefined);
+      const absolutePath = React.useRef(undefined);
+      const refreshInfo = React.useCallback(() => {
+        const at = absolutePath.current;
+        if (at === undefined) return;
+        fetchFileInfo(at).then((next: FileInfo | undefined) => {
+          if (!tab.signal.aborted && absolutePath.current === at) setInfo(next);
+        });
+      }, [tab.signal]);
 
       const key = dirtyKey(props.sessionId, tab.id);
       const setDirty = React.useCallback(
@@ -949,8 +1539,10 @@ window.__ModuleLoader__.load({
           return undefined;
         }
         version.current = loaded.version;
+        absolutePath.current = loaded.absolutePath;
+        refreshInfo();
         return loaded;
-      }, [remote, sessionId, path, tab.signal]);
+      }, [remote, sessionId, path, tab.signal, refreshInfo]);
 
       React.useEffect(() => {
         let alive = true;
@@ -1006,6 +1598,7 @@ window.__ModuleLoader__.load({
             if (response.ok) {
               version.current = (await response.json()).version;
               editor.current.markSaved(token);
+              refreshInfo();
               setSave({ state: 'saved' });
               // Clicking the Save button took keyboard focus; hand it back to the text.
               editor.current.focus();
@@ -1029,7 +1622,7 @@ window.__ModuleLoader__.load({
             setSave({ state: 'error', key: 'editor.saveError' });
           }
         },
-        [save.state, sessionId, path],
+        [save.state, sessionId, path, refreshInfo],
       );
 
       const onSave = React.useCallback(() => {
@@ -1095,6 +1688,24 @@ window.__ModuleLoader__.load({
             dirty && h('span', { className: 'dlf-ed-dot' }, ' ●'),
           ),
           h('span', { className: 'dlf-ed-spacer' }),
+          info !== undefined &&
+            (info.size !== undefined || info.modified !== undefined) &&
+            h(
+              'span',
+              {
+                className: 'dlf-ed-info',
+                'data-dlf-info': '',
+                title: info.modified?.toLocaleString(),
+              },
+              info.size !== undefined && info.modified !== undefined
+                ? t('editor.info', {
+                    size: formatSize(info.size),
+                    modified: formatModified(info.modified),
+                  })
+                : info.size !== undefined
+                  ? formatSize(info.size)
+                  : formatModified(info.modified as Date),
+            ),
           status &&
             h(
               'span',
@@ -1246,6 +1857,10 @@ window.__ModuleLoader__.load({
         const SessionShowFiles = () => h(ShowFiles, { sidebarRight: ctx.sidebarRight, t });
         // Inside the Files tab a "Show files" button would be a no-op: render nothing.
         const HiddenInFilesTab = () => null;
+        const FilesTabNewFile = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
+          h(CreateButton, { ...props, kind: 'file', sidebarRight: ctx.sidebarRight, t });
+        const FilesTabNewFolder = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
+          h(CreateButton, { ...props, kind: 'folder', sidebarRight: ctx.sidebarRight, t });
 
         const FileRouteDownload = (props: { actionUrl?: unknown }) => {
           const url = routeUrl(props.actionUrl);
@@ -1263,6 +1878,13 @@ window.__ModuleLoader__.load({
                   t,
                 }),
                 h(DownloadButton, { url: pathUrl(props.absolutePath), t }),
+                h(EntryButtons, {
+                  sessionId: props.sessionId,
+                  absolutePath: props.absolutePath,
+                  sidebarRight: ctx.sidebarRight,
+                  remote: ctx.remote,
+                  t,
+                }),
               )
             : null;
         const PathDownloadProminent = (props: { absolutePath?: unknown }) =>
@@ -1310,6 +1932,28 @@ window.__ModuleLoader__.load({
               locale: NS,
             },
             HiddenInFilesTab,
+          ),
+        );
+        ctx.slots.inject('sidebar.right.tab.files.actions', () =>
+          ctx.slots.register(
+            {
+              name: 'sidebar.right.tab.files.actions',
+              id: `${EDITOR_ID}/new-file`,
+              order: 10,
+              locale: NS,
+            },
+            FilesTabNewFile,
+          ),
+        );
+        ctx.slots.inject('sidebar.right.tab.files.actions', () =>
+          ctx.slots.register(
+            {
+              name: 'sidebar.right.tab.files.actions',
+              id: `${EDITOR_ID}/new-folder`,
+              order: 11,
+              locale: NS,
+            },
+            FilesTabNewFolder,
           ),
         );
 

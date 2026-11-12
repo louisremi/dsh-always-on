@@ -5,6 +5,7 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin for
 Run the Harness in a Docker container — on a NAS, a server, anywhere — and it lives on a machine of its own: the stock "show file location" and "Open in app" buttons would have to reach a desktop that isn't there, and nothing inside the container can read or write your computer's files. Your browser is the only connection between you and your files. This plugin makes it enough, replacing the dead buttons with things that work through it:
 - **Download file** buttons that save a file to your computer.
 - **Show files**, which opens the sidebar file explorer.
+- **New file** and **New folder**, in the Files tab, and **Rename/move** and **Delete** for the file you are previewing.
 - **Edit**, which opens a text file in an in-sidebar code editor ([Monaco](https://microsoft.github.io/monaco-editor/), the editor behind VS Code) and saves it back to the Harness host.
 
 ## Install
@@ -25,8 +26,19 @@ Nothing to configure.
 
 **Show files.** The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
 
+**New file.** In the sidebar's Files tab, the new-file button (next to Reload) asks for a name and creates an empty file in the folder the tab shows, then opens it in the editor. Type `notes/todo.md` to create missing folders on the way. It never overwrites anything: if the name is taken, it says so. It follows the session's sandbox mode like saving does, and is stricter in one way: in workspace-write mode it only creates inside the workspace (and any extra writable directories), never in temp areas.
+
+**New folder.** The button next to New file creates a folder (`docs/drafts` creates both levels) in the folder the Files tab shows. Same rules: it never replaces anything and follows the sandbox mode. Since the Harness filesystem layer has no "make directory" operation, the plugin calls `mkdir` itself, after the same sandbox check. That is only possible when the Harness files live on the Harness host, which is also what downloads need.
+
+**Rename / move and Delete.** A file open in the sidebar preview gets two more buttons next to Download:
+- **Rename or move** asks for a new name, with the stem pre-selected. A plain name renames in place, `folder/name` moves it into a (possibly new) sub-folder, and an absolute path moves it there. It never replaces an existing file: if the name is taken, it says so. Tabs showing the old name are closed and the file reopens under its new name.
+- **Delete** asks for confirmation, deletes the file and closes its tabs. There is no undo.
+- Both are refused while an editor tab has unsaved changes to that file, and both follow the sandbox mode like New folder.
+- They only act on regular files. Symlinks are refused, not followed. Folders cannot be renamed or deleted from the UI yet.
+
 **Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
+- The header shows the file's size and when it was last modified, refreshed after each save.
 - If the file changed on disk after you opened it, saving is refused and you choose **Reload from disk**, **Overwrite**, or **Keep editing**. Nothing is overwritten silently.
 - Closing a tab (or the browser page) with unsaved changes asks for confirmation.
 - Line endings (LF/CRLF) and a leading UTF-8 byte-order mark are preserved.
@@ -35,21 +47,37 @@ Nothing to configure.
 
 ## How it works
 
-The plugin adds two authenticated routes to the Harness, `GET /api/download.file` and `POST /api/save.file`, and registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check.
+The plugin adds authenticated routes to the Harness, `GET /api/download.file`, `POST /api/save.file`, `POST /api/create.file`, `POST /api/create.folder`, `POST /api/rename.file` and `POST /api/delete.file`, and registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check, after the plugin's own sandbox check.
 
 ### The editor and the CDN
 
-To keep the package small (~69 kB), Monaco is **not bundled**. On the first Edit it is loaded from [jsDelivr](https://www.jsdelivr.com/) at a pinned version (`monaco-editor@0.52.2`).
+To keep the package small (~116 kB), Monaco is **not bundled**. On the first Edit it is loaded from [jsDelivr](https://www.jsdelivr.com/) at a pinned version (`monaco-editor@0.52.2`).
 - It runs in a **sandboxed iframe** (`sandbox="allow-scripts"`, no `allow-same-origin`) with a Content-Security-Policy that only permits the CDN. The CDN's code therefore cannot read the Harness page, your session cookie, local storage, or call the Harness API; it only exchanges messages with the editor wrapper.
 - The loader script is checked with Subresource Integrity (SRI). Files the loader then pulls in are not individually pinned by hash, which is why the isolation above matters.
 - **Your browser needs internet access to `cdn.jsdelivr.net`** (the Harness host does not). If it is unreachable or blocked, the editor falls back to a plain `<textarea>` with the same save, conflict and dirty-state behaviour, and says so.
 - jsDelivr sees your IP address and user agent when Monaco loads.
 
+## Security
+
+This plugin lets anyone who can use your Harness download and change files through the browser. It is built not to give them anything they could not already do there.
+- **Authenticated routes only.** Every route lives under `/api/` on the Harness's own connection layer (`ctx.connection.fetch`). Requests without a valid session cookie are rejected (401) before the plugin sees them, and only the Harness owner reaches the routes. Requests from foreign hosts or other sites are rejected too: cross-site `Sec-Fetch-Site` or a foreign `Origin` gets a 403. Nothing is served from a plain, unauthenticated web route.
+- **Writes follow the session's sandbox mode.** Saves go through the Harness filesystem layer with the sandbox policy of the session the file belongs to, and the plugin checks that policy itself first, so it also holds on a filesystem backend that does not enforce it. In `read-only` mode nothing is written. In `workspace-write` mode the target must be inside the session's writable roots (its workspace, any extra writable directories, the temp areas). Only `danger-full-access` allows writes anywhere, exactly as for the agent's own file tools. The plugin never widens a session's mode. For a session that is not running, it uses that session's saved workspace and the deployment's default mode.
+- **Creating, renaming and deleting are fenced by the plugin itself.** Before New file, New folder, Rename/move or Delete touches anything, the plugin checks the canonical path (symlinks resolved) against the session's policy, and a path it may not touch is refused whether or not it exists. Because a folder could be swapped for a symlink right after that check, new folders and renamed files are checked again where they landed and undone if they ended up outside, and a file is re-identified just before it is deleted. This holds even on a Harness filesystem backend that does not enforce the policy. In `workspace-write` mode the check is stricter than for the agent: only the workspace and its extra writable directories count, never temp areas, and the workspace root itself can't be renamed or deleted. These actions never replace an existing entry, and a rename is all or nothing: if it fails, the file keeps its old name and no new folders are left behind. Rename and Delete act only on regular files: symlinks are refused rather than followed, and folders are never deleted.
+- **Writes are atomic and checked.** A save writes a temporary file and renames it over the target, so a crash or a full disk never leaves a half-written file. It is refused if the file changed on disk since the editor read it, unless you choose **Overwrite**.
+- **No silent corruption.** Binary files and invalid UTF-8 are refused, not decoded with replacement characters. Line endings and a byte-order mark are preserved.
+- **Downloads** are limited to regular files the Harness filesystem can reach. They are sent as `application/octet-stream` attachments with `X-Content-Type-Options: nosniff`, so the browser never renders them inline.
+- **The CDN editor is isolated.** See [The editor and the CDN](#the-editor-and-the-cdn).
+
+**What it does not protect against:** anyone you let into your Harness can already run shell commands and agent tools, which are far more powerful than these buttons. Keep the Harness behind a trusted boundary: localhost, a VPN or tailnet, or an authenticated reverse proxy. Mount only the directories you want it to touch, and rely on version control or backups for recovery.
+
+Found a security problem? Please [open an issue](https://github.com/louisremi/dsh-always-on/issues), or contact the maintainer privately for anything sensitive.
+
 ## Limitations
 
 - Download: single files only; folders are not downloadable.
+- Rename and delete: single files only; folders cannot be renamed or deleted from the UI.
 - Edit: text files up to 1 MiB; no multi-user locking beyond the on-disk version check.
-- Tested with DSH `0.2.0-rc.2`. It depends on the stock `open-in-app` and `sidebar-right` plugins' slot names and public API.
+- Tested with DSH `0.2.2-alpha.2`. It depends on the stock `open-in-app` and `sidebar-right` plugins' slot names and public API.
 
 ## Development
 
@@ -59,7 +87,7 @@ The source is TypeScript; `npm run build` compiles it to `dist/` (it also runs a
 npm ci
 npm run check      # TypeScript typecheck of src, tests and e2e
 npm run build      # compile src/ to dist/
-npm test           # host route unit tests (no browser needed)
+npm test           # host route tests, incl. the real Harness fs + sandbox stack (no browser needed)
 npm run test:e2e   # opt-in: real headless Chromium + real Monaco from the CDN (builds first)
 ```
 

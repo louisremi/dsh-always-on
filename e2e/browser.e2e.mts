@@ -1,7 +1,8 @@
 /**
  * Opt-in browser end-to-end suite: `npm run test:e2e`.
  *
- * Drives dist/client.js and the real save route in headless Chromium against the
+ * Drives dist/client.js and the plugin's real Host routes (save, download, create,
+ * rename, delete; over a fake Harness fs) in headless Chromium against the
  * REAL Monaco build on jsDelivr (needs internet), including a CDN-blocked
  * run, edit conflicts and the iframe sandbox isolation. Not part of
  * `npm test` / CI because it needs a browser and network.
@@ -12,12 +13,12 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { SaveContext } from '../src/context.ts';
 
 const require = createRequire(import.meta.url);
@@ -26,6 +27,9 @@ const REACT_UMD = process.env.REACT_UMD ?? require.resolve('react/umd/react.deve
 const REACT_DOM_UMD =
   process.env.REACT_DOM_UMD ?? require.resolve('react-dom/umd/react-dom.development.js');
 const { handleSave } = await import('../src/save-route.ts');
+const { handleDownload } = await import('../src/download-route.ts');
+const { handleCreateFile, handleCreateFolder } = await import('../src/create-route.ts');
+const { handleRenameFile, handleDeleteFile } = await import('../src/entry-route.ts');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
 const versionOf = (p: string) => {
@@ -46,6 +50,11 @@ const hostCtx: SaveContext = {
       }
     },
     writeText: async (t, content, intent) => {
+      if (intent?.kind === 'createIfAbsent') {
+        mkdirSync(dirname(t.displayPath!), { recursive: true });
+        writeFileSync(t.displayPath!, content, { flag: 'wx' });
+        return { operation: 'create', version: versionOf(t.displayPath!) };
+      }
       if (intent?.kind === 'replaceIfVersion' && intent.version !== versionOf(t.displayPath!))
         throw Object.assign(new Error('stale'), { code: 'FS_STALE_VERSION' });
       writeFileSync(t.displayPath!, content);
@@ -75,25 +84,26 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
 :root{--dsw-alias-bg-layer-1:#fff;--dsw-alias-label-primary:#111;--dsw-alias-border-l2:#ccc}
 html,body{margin:0;height:100%} #root{width:600px;height:500px}</style></head><body><div id="root"></div>
 <script src="/react.js"></script><script src="/react-dom.js"></script><script src="/ft.js"></script>
-<script>window.__regs=[];window.__opened=[];window.__closeHandlers={};window.__tabTypes=[];
+<script>window.__ws=${JSON.stringify(dir)};window.__regs=[];window.__opened=[];window.__closeHandlers={};window.__tabTypes=[];
 window.__ModuleLoader__={load:(m)=>{window.__mod=m;}};</script>
 <script src="/client.js"></script>
 <script>
 const params=new URLSearchParams(location.search);
 const t=(k,v)=>k+(v?JSON.stringify(v):'');
 const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
- sidebarRight:{openResource:(a,o)=>window.__opened.push([a,o]),openTab:()=>{},registerCloseHandler:(k,f)=>{window.__closeHandlers[k]=f;return()=>{}}},
+ sidebarRight:{openResource:(a,o)=>window.__opened.push([a,o]),openTab:()=>{},registerCloseHandler:(k,f)=>{window.__closeHandlers[k]=f;return()=>{}},
+  tabsIn:()=>window.__tabs||[],closeIn:(s,id)=>{(window.__closed=window.__closed||[]).push(id);}},
  sidebarRightTabs:{register:(d)=>{window.__tabTypes.push(d);return()=>{}}},
  theme:{getTheme:()=>({active:{colorScheme:params.get('dark')?'dark':'light'}})},
  on:()=>()=>{},
- remote:{workspaceFiles:{readBytes:async(sessionId,path)=>{
+ remote:{workspaceFiles:{stat:async(sessionId,path)=>({ok:true,value:{absolutePath:path.startsWith('/')?path:window.__ws+'/'+path}}),readBytes:async(sessionId,path)=>{
    const r=await fetch('/fs/read?path='+encodeURIComponent(path)); if(r.status===404) return {ok:false,error:{code:'workspace-file/not-found'}};
    const j=await r.json(); const bin=atob(j.b64); const data=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)data[i]=bin.charCodeAt(i);
    return {ok:true,value:{data,eof:true,bytes:data.length,version:j.version,absolutePath:path}};}}},
  slots:{inject:(n,f)=>f(),register:(o,c)=>{window.__regs.push([o,c]);}}};
 const exp=window.__mod.factory((s)=>{if(s==='react')return window.React;if(s==='@deepseek-ai/dsh-client-ui-primitives'){if(params.get('prim')==='none'||!window.__ft)throw new Error('missing');return window.__ft;}throw new Error(s)});
 exp.apply(ctx);
-const reg=(name,key)=>window.__regs.find(([o])=>o.name===name&&(key===undefined||o.key===key))[1];
+const reg=(name,key,id)=>window.__regs.find(([o])=>o.name===name&&(key===undefined||o.key===key)&&(id===undefined||o.id===id))[1];
 const h=React.createElement;
 const info={tab:{id:'tab1',contentId:params.get('addr'),title:'x',signal:new AbortController().signal,actions:{bindCommands:()=>()=>{}}}};
 window.__mountTitles=(titles)=>{
@@ -103,6 +113,7 @@ window.__mountTitles=(titles)=>{
 window.__mount=(what)=>{
   const root=ReactDOM.createRoot(document.getElementById('root'));
   if(what==='editor') root.render(h(reg('sidebar.right.pane.tab',Object.keys({})[0]||'@louisremi/dsh-always-on/editor'),{useTabInfo:()=>info,sessionId:'sess'}));
+  else if(what==='newfile'||what==='newfolder') root.render(h(reg('sidebar.right.tab.files.actions',undefined,'@louisremi/dsh-always-on/editor/new-'+what.slice(3)),{sessionId:'sess',absolutePath:params.get('abs')}));
   else root.render(h(reg('sidebar.right.tab.document.actions'),{sessionId:'sess',absolutePath:params.get('abs')}));
 };
 if(params.get('what')==='titles')window.__mountTitles((params.get('t')||'').split('|'));else window.__mount(params.get('what'));
@@ -160,6 +171,56 @@ const server = http.createServer(async (req, res) => {
     } catch {
       return send(404, 'nope');
     }
+  }
+  if (url.pathname === '/api/download.file') {
+    const out = await handleDownload(
+      {
+        fs: {
+          processPathFromHostPath: (p) => p,
+          resolve: async (p) => ({ displayPath: p }),
+          stat: hostCtx.fs.stat,
+          readByteRange: async (t, { offset, length }) =>
+            readFileSync(t.displayPath!).subarray(offset, offset + length),
+        },
+        sandboxPolicy: hostCtx.sandboxPolicy,
+        workspaceFiles: hostCtx.workspaceFiles,
+        sessionQuery: { readEvent: async () => Promise.reject(new Error('unused')) },
+        workspaceChanges: { summary: () => undefined },
+      },
+      new Request(`http://x${url.pathname}${url.search}`, { method: req.method }),
+    );
+    res.writeHead(out.status, Object.fromEntries(out.headers));
+    res.end(Buffer.from(await out.arrayBuffer()));
+    return;
+  }
+  const mutations: Record<string, (ctx: SaveContext, r: Request) => Promise<Response>> = {
+    '/api/rename.file': handleRenameFile,
+    '/api/delete.file': handleDeleteFile,
+  };
+  if (url.pathname in mutations) {
+    const body = await new Promise<Buffer>((r) => {
+      const c: Buffer[] = [];
+      req.on('data', (d) => c.push(d));
+      req.on('end', () => r(Buffer.concat(c)));
+    });
+    const out = await mutations[url.pathname](
+      hostCtx,
+      new Request(`http://x${url.pathname}`, { method: 'POST', body: new Uint8Array(body) }),
+    );
+    return send(out.status, await out.text(), 'application/json');
+  }
+  if (url.pathname === '/api/create.file' || url.pathname === '/api/create.folder') {
+    const body = await new Promise<Buffer>((r) => {
+      const c: Buffer[] = [];
+      req.on('data', (d) => c.push(d));
+      req.on('end', () => r(Buffer.concat(c)));
+    });
+    const handle = url.pathname === '/api/create.file' ? handleCreateFile : handleCreateFolder;
+    const out = await handle(
+      hostCtx,
+      new Request(`http://x${url.pathname}`, { method: 'POST', body: new Uint8Array(body) }),
+    );
+    return send(out.status, await out.text(), 'application/json');
   }
   if (url.pathname === '/api/save.file') {
     const body = await new Promise<Buffer>((r) => {
@@ -322,6 +383,254 @@ await check('Save button saves; second edit after save uses the fresh version', 
     'dark theme applied',
   );
 });
+
+await check(
+  'editor header shows size and modification time, refreshed after save',
+  async (page) => {
+    const f = join(dir, 'info.txt');
+    writeFileSync(f, 'x'.repeat(2048));
+    // Plain-text editor (CDN blocked): fast and network-independent.
+    await page.route('https://cdn.jsdelivr.net/**', (route: any) => route.abort());
+    await open(page, f);
+    await page.waitForSelector('[data-dlf-info]', { timeout: 15000 });
+    const first = await page.textContent('[data-dlf-info]');
+    assert.match(first, /^editor\.info\{"size":"2\.0 KiB","modified":"[^"]+"\}$/);
+    await page.waitForSelector('textarea.dlf-ed-text', { timeout: 30000 });
+    await page.click('textarea.dlf-ed-text');
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('yy');
+    await page.click('.dlf-ed-bar .dlf-ed-btn');
+    await page.waitForFunction(
+      () =>
+        /"size":"2\.0 KiB"/.test(document.querySelector('[data-dlf-info]')?.textContent ?? '') &&
+        /editor\.saved/.test(document.querySelector('.dlf-ed-status')?.textContent ?? ''),
+      null,
+      { timeout: 8000 },
+    );
+    assert.equal(readFileSync(f, 'utf8').length, 2050);
+    await page.waitForFunction(
+      () => (document.querySelector('[data-dlf-info]')?.getAttribute('title') ?? '') !== '',
+    );
+  },
+);
+
+await check(
+  'New file: dialog validates, refuses an existing name, creates and opens the editor',
+  async (page) => {
+    writeFileSync(join(dir, 'exists.txt'), 'keep');
+    await page.goto(`${base}/?what=newfile&abs=${encodeURIComponent(dir)}`);
+    await page.click('[data-new-file]');
+    await page.waitForSelector('[data-dlf-dialog] input');
+    // Invalid name: inline error, Create disabled, nothing sent.
+    await page.fill('[data-dlf-dialog] input', '../escape.txt');
+    await page.waitForSelector('[data-dlf-dialog] [role=alert]');
+    assert.equal(await page.isDisabled('[data-dlf-dialog] button[type=submit]'), true);
+    // Existing name: the Host answers 409, the dialog stays open with a message.
+    await page.fill('[data-dlf-dialog] input', 'exists.txt');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() =>
+      /create\.exists/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+    assert.equal(readFileSync(join(dir, 'exists.txt'), 'utf8'), 'keep');
+    // A valid nested name: created empty, dialog closes, the editor opens on it.
+    await page.fill('[data-dlf-dialog] input', 'made/new.md');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.equal(readFileSync(join(dir, 'made/new.md'), 'utf8'), '');
+    const opened = await page.evaluate(() => (window as any).__opened);
+    assert.deepEqual(opened.at(-1), [
+      `dsh-resource://file/session/sess/${join(dir, 'made/new.md').split('/').map(encodeURIComponent).join('/')}`,
+      { kind: 'dlf-editor' },
+    ]);
+    // Escape closes without creating anything.
+    await page.click('[data-new-file]');
+    await page.fill('[data-dlf-dialog] input', 'never.txt');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.throws(() => readFileSync(join(dir, 'never.txt')));
+  },
+);
+
+await check(
+  'New folder: creates nested folders, refuses existing names, opens no editor',
+  async (page) => {
+    await page.goto(`${base}/?what=newfolder&abs=${encodeURIComponent(dir)}`);
+    await page.click('[data-new-folder]');
+    await page.fill('[data-dlf-dialog] input', 'docs/drafts');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.ok(statSync(join(dir, 'docs/drafts')).isDirectory());
+    assert.deepEqual(await page.evaluate(() => (window as any).__opened), []);
+    await page.click('[data-new-folder]');
+    await page.fill('[data-dlf-dialog] input', 'docs');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() =>
+      /create\.exists/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+  },
+);
+
+const fileAddr = (p: string) =>
+  `dsh-resource://file/session/sess/${p.split('/').map(encodeURIComponent).join('/')}`;
+
+await check(
+  'Rename: moves the file, refuses taken names, reopens it and closes old tabs',
+  async (page) => {
+    const f = join(dir, 'ren.txt');
+    writeFileSync(f, 'r');
+    writeFileSync(join(dir, 'taken-ren.txt'), 'keep');
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(f)}`);
+    await page.evaluate((a: string) => {
+      (window as any).__tabs = [{ id: 'p1', kind: 'text', contentId: a }];
+    }, fileAddr(f));
+    await page.click('[data-rename-file] button');
+    const value = await page.inputValue('[data-dlf-dialog] input');
+    assert.equal(value, 'ren.txt');
+    // Stem selected, extension not.
+    assert.equal(
+      await page.evaluate(() => {
+        const i = document.querySelector('[data-dlf-dialog] input') as HTMLInputElement;
+        return [i.selectionStart, i.selectionEnd].join(',');
+      }),
+      '0,3',
+    );
+    await page.fill('[data-dlf-dialog] input', 'taken-ren.txt');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() =>
+      /create\.exists/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+    assert.equal(readFileSync(join(dir, 'taken-ren.txt'), 'utf8'), 'keep');
+    await page.fill('[data-dlf-dialog] input', 'moved/ren2.txt');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.equal(readFileSync(join(dir, 'moved/ren2.txt'), 'utf8'), 'r');
+    assert.throws(() => readFileSync(f));
+    assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['p1']);
+    assert.deepEqual((await page.evaluate(() => (window as any).__opened)).at(-1), [
+      fileAddr(join(dir, 'moved/ren2.txt')),
+      {},
+    ]);
+  },
+);
+
+await check(
+  'Delete: confirms, deletes, closes tabs; blocked while an editor is dirty',
+  async (page) => {
+    const f = join(dir, 'del.txt');
+    writeFileSync(f, 'd');
+    // A dirty editor tab on this file blocks the delete.
+    await page.route('https://cdn.jsdelivr.net/**', (route: any) => route.abort());
+    await page.goto(`${base}/?what=editor&addr=${encodeURIComponent(fileAddr(f))}`);
+    await page.waitForSelector('textarea.dlf-ed-text', { timeout: 30000 });
+    await page.click('textarea.dlf-ed-text');
+    await page.keyboard.type('x');
+    await page.waitForFunction(() => document.querySelector('.dlf-ed-dot'));
+    await page.evaluate(
+      ([a, path]: string[]) => {
+        (window as any).__tabs = [{ id: 'tab1', kind: 'dlf-editor', contentId: a }];
+        const host = document.createElement('div');
+        host.id = 'actions';
+        document.body.appendChild(host);
+        (window as any).ReactDOM.createRoot(host).render(
+          (window as any).React.createElement(
+            (window as any).__regs.find(
+              ([o]: any) => o.name === 'sidebar.right.tab.document.actions',
+            )[1],
+            { sessionId: 'sess', absolutePath: path },
+          ),
+        );
+      },
+      [fileAddr(f), f],
+    );
+    await page.click('#actions [data-delete-file] button');
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForFunction(() =>
+      /entry\.dirty/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+    assert.equal(readFileSync(f, 'utf8'), 'd');
+    await page.keyboard.press('Escape');
+    // A clean page (no dirty editor): deletes and closes the preview tab.
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(f)}`);
+    await page.evaluate((a: string) => {
+      (window as any).__tabs = [{ id: 'p9', kind: 'text', contentId: a }];
+    }, fileAddr(f));
+    await page.click('[data-delete-file] button');
+    assert.match(
+      await page.textContent('[data-dlf-dialog]'),
+      /delete\.question\{"name":"del\.txt"\}/,
+    );
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.throws(() => readFileSync(f));
+    assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['p9']);
+  },
+);
+
+await check(
+  'Rename/Delete only touch tabs of THIS file: a relative tab of a same-named file elsewhere is kept',
+  async (page) => {
+    mkdirSync(join(dir, 'twin'), { recursive: true });
+    const f = join(dir, 'twin', 'same.txt');
+    writeFileSync(f, 's');
+    writeFileSync(join(dir, 'same.txt'), 'other');
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(f)}`);
+    await page.evaluate(
+      ([mine, other]: string[]) => {
+        (window as any).__tabs = [
+          { id: 'mine', kind: 'text', contentId: mine },
+          { id: 'other', kind: 'text', contentId: other },
+        ];
+      },
+      [fileAddr('twin/same.txt'), fileAddr('same.txt')],
+    );
+    await page.click('[data-delete-file] button');
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.throws(() => readFileSync(f));
+    assert.equal(readFileSync(join(dir, 'same.txt'), 'utf8'), 'other');
+    assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['mine']);
+  },
+);
+
+await check(
+  'New file: Host errors get specific messages (gone folder, gone session)',
+  async (page) => {
+    await page.goto(`${base}/?what=newfile&abs=${encodeURIComponent(join(dir, 'no-such-dir'))}`);
+    const reply = (status: number, error: string) =>
+      page.route('**/api/create.file', (route: any) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error }) }),
+      );
+    const alert = (re: RegExp) =>
+      page.waitForFunction(
+        (src: string) =>
+          new RegExp(src).test(
+            document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+          ),
+        re.source,
+      );
+    await page.click('[data-new-file]');
+    await reply(404, 'not found');
+    await page.fill('[data-dlf-dialog] input', 'x.txt');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await alert(/create\.noFolder/);
+    await page.unroute('**/api/create.file');
+    await reply(404, 'session not found');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await alert(/mutation\.noSession/);
+    await page.unroute('**/api/create.file');
+    await reply(422, 'path has no verified Host path');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await alert(/mutation\.unmapped/);
+  },
+);
 
 await check(
   'external change → 409 conflict banner; Overwrite then wins; file never clobbered silently',

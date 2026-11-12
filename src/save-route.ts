@@ -1,6 +1,9 @@
+import { realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-import type { SandboxPolicy, SaveContext, SaveRegisterContext, WriteIntent } from './context.ts';
+import type { SaveContext, SaveRegisterContext, WriteIntent } from './context.ts';
 import { failureStatus } from './download-route.ts';
+import { assertWritable } from './fence.ts';
+import { policyFor } from './session-policy.ts';
 
 export const SAVE_PATH = '/api/save.file';
 /** Largest file the editor opens or saves; also bounds the request body. */
@@ -63,32 +66,13 @@ async function parse(request: Request): Promise<SaveInput | Response> {
 }
 
 /**
- * Sandbox policy for the Session the save belongs to: the Session's own
- * workspace boundary and mode when it is live, else its persisted workspace
- * root under the deployment default mode. Never widened beyond that.
- */
-async function policyFor(
-  ctx: SaveContext,
-  sessionId: string,
-  signal: AbortSignal,
-): Promise<SandboxPolicy | undefined> {
-  const live = ctx.sessions?.get(sessionId);
-  if (live !== undefined) return ctx.sandboxPolicy.resolve({ session: live });
-  const stored = await ctx.get('sessionPersistence')?.stat(sessionId);
-  signal.throwIfAborted();
-  if (stored === undefined) return undefined;
-  return {
-    mode: ctx.sandboxPolicy.defaultMode,
-    workspaceRoot: stored.header?.cwd ?? ctx.sandboxPolicy.workspaceRoot,
-    sessionId,
-  };
-}
-
-/**
  * Handle POST /api/save.file: replace a UTF-8 text file the Session can reach,
  * only if it is unchanged since the version the editor read (or `force`).
  * The write runs through `ctx.fs.writeText` with the Session's sandbox policy,
- * so read-only mode and workspace boundaries are enforced by the Harness.
+ * after the plugin's own fence (src/fence.ts) with the agent's grant (temp
+ * areas included), so read-only mode and workspace boundaries hold even on a
+ * backend that does not enforce the policy. A save replaces the file a
+ * symlink points to, so the fence judges that file, not the link.
  */
 export async function handleSave(ctx: SaveContext, request: Request): Promise<Response> {
   if (request.method !== 'POST') return fail(405, 'POST only');
@@ -109,10 +93,13 @@ export async function handleSave(ctx: SaveContext, request: Request): Promise<Re
     const info = await fs.stat(target, signal);
     if (info === undefined) return fail(404);
     if (info.type !== 'file') return fail(403, 'not a regular file');
+    await assertWritable(policy, await realpath(absolutePath), { temp: true });
 
-    const intent: WriteIntent | undefined = input.force
-      ? undefined
-      : { kind: 'replaceIfVersion', version: input.expectedVersion };
+    // parse() guarantees a non-empty expectedVersion whenever force is false.
+    const intent: WriteIntent | undefined =
+      input.force || input.expectedVersion === undefined
+        ? undefined
+        : { kind: 'replaceIfVersion', version: input.expectedVersion };
     const outcome = await fs.writeText(target, input.content, intent, signal, policy);
     return json(200, { version: outcome.version, operation: outcome.operation });
   } catch (error) {

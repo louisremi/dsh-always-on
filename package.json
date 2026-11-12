@@ -1,7 +1,7 @@
 {
   "name": "@louisremi/dsh-always-on",
   "version": "0.3.1",
-  "description": "DeepSeek Harness plugin for harnesses running in a container, with no access to your local file system: download buttons instead of \"Show file location\", a \"Show files\" shortcut, and an in-sidebar Monaco file editor, all through the browser.",
+  "description": "DeepSeek Harness plugin for harnesses running in a container, with no access to your local file system: download buttons instead of \"Show file location\", a \"Show files\" shortcut, creating, renaming and deleting files, and an in-sidebar Monaco file editor, all through the browser.",
   "keywords": [
     "deepseek-harness",
     "container",
@@ -50,6 +50,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",
+    "@deepseek-ai/cordis": "4.0.6-alpha.1",
+    "@deepseek-ai/dsh-api-workspace-files": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-fs-local": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-fs-sandbox": "0.2.2-alpha.2",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2"
   },
