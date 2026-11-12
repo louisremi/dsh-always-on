@@ -29,10 +29,11 @@ import { WorkspaceFiles } from '@deepseek-ai/dsh-api-workspace-files';
 import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local';
 import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox';
 import type { DownloadContext, LiveSession, SaveContext } from '../src/context.ts';
-import { handleCreateFile, handleCreateFolder, undoMkdir } from '../src/create-route.ts';
+import { handleCreateFile, handleCreateFolder } from '../src/create-route.ts';
 import { handleDownload } from '../src/download-route.ts';
 import { handleDeleteFile, handleRenameFile } from '../src/entry-route.ts';
 import { canonicalPath, landedInside, mayWrite } from '../src/fence.ts';
+import { undoMkdir } from '../src/paths.ts';
 import { handleSave } from '../src/save-route.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
@@ -446,8 +447,7 @@ test('fence: canonical paths and the narrow workspace-only grant', async () => {
   assert.equal(await mayWrite(policy, join(workspace, 'x')), true);
   assert.equal(await mayWrite(policy, join(workspace, 'escape-dir', 'x')), false);
   assert.equal(await mayWrite(policy, join(tmpdir(), 'x')), false, 'temp areas are not granted');
-  assert.equal(await mayWrite(policy, workspace), true);
-  assert.equal(await mayWrite(policy, workspace, { root: false }), false);
+  assert.equal(await mayWrite(policy, workspace), false, 'a root itself is never a target');
   assert.equal(await mayWrite({ ...policy, mode: 'read-only' }, join(workspace, 'x')), false);
   assert.equal(await mayWrite({ ...policy, mode: 'bogus' }, join(workspace, 'x')), false);
   assert.equal(

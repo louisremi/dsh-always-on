@@ -1,22 +1,25 @@
 import { realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { SaveContext, SaveRegisterContext, WriteIntent } from './context.ts';
-import { failureStatus } from './download-route.ts';
 import { assertWritable } from './fence.ts';
+import { failureStatus, failWith, handlePost, json, jsonObject, registerRoute } from './http.ts';
 import { policyFor } from './session-policy.ts';
 
 export const SAVE_PATH = '/api/save.file';
 /** Largest file the editor opens or saves; also bounds the request body. */
 export const MAX_SAVE_BYTES = 1024 * 1024;
 
-const FAIL_MESSAGE: Record<number, string> = {
-  400: 'invalid request',
-  403: 'write not permitted',
-  404: 'file not found',
-  409: 'file changed on disk',
-  413: 'file too large',
-  415: 'not a text file',
-};
+const fail = failWith(
+  {
+    400: 'invalid request',
+    403: 'write not permitted',
+    404: 'file not found',
+    409: 'file changed on disk',
+    413: 'file too large',
+    415: 'not a text file',
+  },
+  'save failed',
+);
 
 interface SaveInput {
   sessionId: string;
@@ -26,31 +29,11 @@ interface SaveInput {
   force: boolean;
 }
 
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'private, no-store',
-      'x-content-type-options': 'nosniff',
-    },
-  });
-}
-
-function fail(status: number, message?: string): Response {
-  return json(status, { error: message ?? FAIL_MESSAGE[status] ?? 'save failed' });
-}
-
 /** Parse and validate the JSON body; returns the fields or a Response to answer with. */
 async function parse(request: Request): Promise<SaveInput | Response> {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return fail(400, 'body must be JSON');
-  }
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) return fail(400);
-  const { sessionId, path, content, expectedVersion, force } = body as Record<string, unknown>;
+  const body = await jsonObject(request, fail);
+  if (body instanceof Response) return body;
+  const { sessionId, path, content, expectedVersion, force } = body;
   if (typeof sessionId !== 'string' || sessionId.length === 0)
     return fail(400, 'sessionId required');
   if (typeof path !== 'string' || path.length === 0 || path.includes('\0'))
@@ -74,9 +57,8 @@ async function parse(request: Request): Promise<SaveInput | Response> {
  * backend that does not enforce the policy. A save replaces the file a
  * symlink points to, so the fence judges that file, not the link.
  */
-export async function handleSave(ctx: SaveContext, request: Request): Promise<Response> {
-  if (request.method !== 'POST') return fail(405, 'POST only');
-  try {
+export function handleSave(ctx: SaveContext, request: Request): Promise<Response> {
+  return handlePost(request, fail, failureStatus, async () => {
     const input = await parse(request);
     if (input instanceof Response) return input;
     const { signal } = request;
@@ -102,36 +84,10 @@ export async function handleSave(ctx: SaveContext, request: Request): Promise<Re
         : { kind: 'replaceIfVersion', version: input.expectedVersion };
     const outcome = await fs.writeText(target, input.content, intent, signal, policy);
     return json(200, { version: outcome.version, operation: outcome.operation });
-  } catch (error) {
-    if (request.signal.aborted) return fail(499, 'cancelled');
-    return fail(failureStatus(error));
-  }
+  });
 }
 
 /** Register the route on the authenticated connection; returns its disposer. */
 export function registerSaveRoute(ctx: SaveRegisterContext): () => Promise<void> {
-  const lifetime = new AbortController();
-  const pending = new Set<Promise<unknown>>();
-  const unregister = ctx.connection.fetch.register({
-    path: SAVE_PATH,
-    methods: ['POST'],
-    requestBody: 'buffered',
-    fetch: (request) => {
-      const task = handleSave(
-        ctx,
-        new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) }),
-      );
-      pending.add(task);
-      const done = () => {
-        pending.delete(task);
-      };
-      task.then(done, done);
-      return task;
-    },
-  });
-  return async () => {
-    lifetime.abort();
-    if (typeof unregister === 'function') unregister();
-    await Promise.allSettled(pending);
-  };
+  return registerRoute(ctx, { path: SAVE_PATH, methods: ['POST'], handle: handleSave });
 }

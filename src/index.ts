@@ -14,7 +14,6 @@ import {
   CREATE_FOLDER_PATH,
   handleCreateFile,
   handleCreateFolder,
-  registerPostRoute,
 } from './create-route.ts';
 import { registerDownloadRoute } from './download-route.ts';
 import {
@@ -23,6 +22,7 @@ import {
   handleRenameFile,
   RENAME_FILE_PATH,
 } from './entry-route.ts';
+import { registerRoute } from './http.ts';
 import { registerSaveRoute } from './save-route.ts';
 
 /** Services the download route needs: auth fence, filesystem, session lookups. */
@@ -64,20 +64,13 @@ export interface PluginContext {
 export function apply(ctx: PluginContext): void {
   ctx.effect(() => registerDownloadRoute(ctx), 'always-on: /api/download.file');
   ctx.effect(() => registerSaveRoute(ctx), 'always-on: /api/save.file');
-  ctx.effect(
-    () => registerPostRoute(ctx, CREATE_FILE_PATH, handleCreateFile),
-    'always-on: /api/create.file',
-  );
-  ctx.effect(
-    () => registerPostRoute(ctx, CREATE_FOLDER_PATH, handleCreateFolder),
-    'always-on: /api/create.folder',
-  );
-  ctx.effect(
-    () => registerPostRoute(ctx, RENAME_FILE_PATH, handleRenameFile),
-    'always-on: /api/rename.file',
-  );
-  ctx.effect(
-    () => registerPostRoute(ctx, DELETE_FILE_PATH, handleDeleteFile),
-    'always-on: /api/delete.file',
-  );
+  const mutations = [
+    [CREATE_FILE_PATH, handleCreateFile],
+    [CREATE_FOLDER_PATH, handleCreateFolder],
+    [RENAME_FILE_PATH, handleRenameFile],
+    [DELETE_FILE_PATH, handleDeleteFile],
+  ] as const;
+  for (const [path, handle] of mutations) {
+    ctx.effect(() => registerRoute(ctx, { path, methods: ['POST'], handle }), `always-on: ${path}`);
+  }
 }

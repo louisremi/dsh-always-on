@@ -1,6 +1,7 @@
 import { stat as hostStat } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
 import type { DownloadContext, DownloadRegisterContext } from './context.ts';
+import { failureStatus, registerRoute } from './http.ts';
 
 export const DOWNLOAD_PATH = '/api/download.file';
 /** Bytes read from the filesystem per stream pull. */
@@ -55,46 +56,6 @@ function isPresentedFile(value: unknown): value is { path: string } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const path = (value as { path?: unknown }).path;
   return typeof path === 'string' && path.trim().length > 0;
-}
-
-interface RemoteErrorShape {
-  remote?: { code?: unknown } | undefined;
-  code?: unknown;
-  data?: { code?: unknown } | undefined;
-}
-
-function remoteCode(error: unknown): unknown {
-  return typeof error === 'object' && error !== null
-    ? ((error as RemoteErrorShape).remote?.code ??
-        (error as RemoteErrorShape).code ??
-        (error as RemoteErrorShape).data?.code)
-    : undefined;
-}
-
-export function failureStatus(error: unknown): number {
-  const code = String(remoteCode(error) ?? '');
-  if (
-    code === 'session/not-found' ||
-    code === 'workspace-file/not-found' ||
-    code === 'SESSION_QUERY_SESSION_NOT_FOUND' ||
-    code === 'SESSION_QUERY_EVENT_NOT_FOUND' ||
-    code === 'FS_NOT_FOUND' ||
-    code === 'ENOENT' ||
-    code === 'ENOTDIR'
-  )
-    return 404;
-  if (code === 'FS_STALE_VERSION' || code === 'FS_NOT_OBSERVED') return 409;
-  if (code === 'FS_TOO_LARGE' || code === 'workspace-file/too-large') return 413;
-  if (code === 'FS_NOT_TEXT') return 415;
-  if (
-    code === 'workspace-file/not-regular-file' ||
-    code === 'workspace-file/outside-workspace' ||
-    code === 'FS_NOT_REGULAR_FILE' ||
-    code === 'FS_PERMISSION_DENIED' ||
-    code === 'FS_SANDBOX_DENIED'
-  )
-    return 403;
-  return 500;
 }
 
 /** Resolve the Host path named by the request's query, or a Response to answer with. */
@@ -218,28 +179,9 @@ export async function handleDownload(ctx: DownloadContext, request: Request): Pr
 
 /** Register the route on the authenticated connection; returns its disposer. */
 export function registerDownloadRoute(ctx: DownloadRegisterContext): () => Promise<void> {
-  const lifetime = new AbortController();
-  const pending = new Set<Promise<unknown>>();
-  const unregister = ctx.connection.fetch.register({
+  return registerRoute(ctx, {
     path: DOWNLOAD_PATH,
     methods: ['GET', 'HEAD'],
-    requestBody: 'buffered',
-    fetch: (request) => {
-      const task = handleDownload(
-        ctx,
-        new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) }),
-      );
-      pending.add(task);
-      const done = () => {
-        pending.delete(task);
-      };
-      task.then(done, done);
-      return task;
-    },
+    handle: handleDownload,
   });
-  return async () => {
-    lifetime.abort();
-    if (typeof unregister === 'function') unregister();
-    await Promise.allSettled(pending);
-  };
 }

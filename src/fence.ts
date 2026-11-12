@@ -96,18 +96,17 @@ async function tempRoots(): Promise<string[]> {
   return roots;
 }
 
-/** How a fence check differs from the default (workspace roots, roots included). */
+/** How a fence check differs from the default (inside the workspace roots). */
 export interface FenceOptions {
-  /** `false`: also refuse the workspace roots themselves (they may only be
-   *  written inside, never renamed or deleted). */
-  root?: boolean;
   /** Also grant the temp areas, exactly like the agent's own `workspace-write`.
    *  Saves use it: they only replace files that already exist. */
   temp?: boolean;
 }
 
 /**
- * Whether the session may change the entry at `path`.
+ * Whether the session may change the entry at `path`. The workspace roots
+ * themselves never qualify: they may only be written inside, never created,
+ * renamed or deleted.
  * @param policy - the session's sandbox policy (never widened by the caller).
  * @param path - absolute Host path of the entry to create, change or remove.
  * @param options - see {@link FenceOptions}.
@@ -121,7 +120,7 @@ export async function mayWrite(
   if (policy.mode !== 'workspace-write') return false;
   const target = await canonicalPath(path);
   const roots = await workspaceRoots(policy);
-  if (options.root === false && roots.includes(target)) return false;
+  if (roots.includes(target)) return false;
   if (options.temp === true) roots.push(...(await tempRoots()));
   return roots.some((root) => isUnder(target, root));
 }
@@ -136,7 +135,7 @@ export async function landedInside(policy: SandboxPolicy, path: string): Promise
   if (policy.mode === 'danger-full-access') return true;
   try {
     const parent = await realpath(dirname(path));
-    return await mayWrite(policy, join(parent, basename(path)), { root: false });
+    return await mayWrite(policy, join(parent, basename(path)));
   } catch {
     return false;
   }
