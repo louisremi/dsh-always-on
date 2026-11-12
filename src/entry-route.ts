@@ -17,34 +17,35 @@ import { constants } from 'node:fs';
 import { copyFile, link, lstat, mkdir, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import type { SandboxPolicy, SaveContext } from './context.ts';
-import { errorStatus, fail, json, nameSegments, OUTSIDE, undoMkdir } from './create-route.ts';
-import { assertWritable, landedInside } from './fence.ts';
+import { assertWritable, FenceError, landedInside } from './fence.ts';
+import { failWith, handlePost, json, jsonObject, mutationStatus } from './http.ts';
+import { nameSegments, undoMkdir } from './paths.ts';
 import { policyFor } from './session-policy.ts';
 
 export const RENAME_FILE_PATH = '/api/rename.file';
 export const DELETE_FILE_PATH = '/api/delete.file';
 
+const fail = failWith(
+  { 400: 'invalid request', 403: 'not permitted', 404: 'not found', 409: 'already exists' },
+  'failed',
+);
+
 interface EntryInput {
   sessionId: string;
   path: string;
-  body: Record<string, unknown>;
+  /** rename only: where the file goes, still unvalidated (see destinationOf). */
+  destination: unknown;
 }
 
 async function parseEntry(request: Request): Promise<EntryInput | Response> {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return fail(400, 'body must be JSON');
-  }
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) return fail(400);
-  const record = body as Record<string, unknown>;
-  const { sessionId, path } = record;
+  const body = await jsonObject(request, fail);
+  if (body instanceof Response) return body;
+  const { sessionId, path, destination } = body;
   if (typeof sessionId !== 'string' || sessionId.length === 0)
     return fail(400, 'sessionId required');
   if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0'))
     return fail(400, 'absolute path required');
-  return { sessionId, path, body: record };
+  return { sessionId, path, destination };
 }
 
 /** The file a rename or delete acts on, as checked: path, policy and identity. */
@@ -70,7 +71,7 @@ async function writableFile(
   if (policy === undefined) return fail(404, 'session not found');
   if (ctx.fs.processPathFromHostPath(input.path) === undefined)
     return fail(422, 'path has no verified Host path');
-  await assertWritable(policy, input.path, { root: false });
+  await assertWritable(policy, input.path);
   const info = await lstat(input.path);
   if (!info.isFile()) return fail(403, 'not a regular file');
   return { hostPath: input.path, policy, dev: info.dev, ino: info.ino };
@@ -88,7 +89,7 @@ async function assertUnchanged(file: WritableFile): Promise<void> {
     now.ino !== file.ino ||
     !(await landedInside(file.policy, file.hostPath))
   )
-    throw OUTSIDE;
+    throw new FenceError(`"${file.hostPath}" is no longer the file that was checked`);
 }
 
 /**
@@ -121,7 +122,8 @@ async function moveNoReplace(from: WritableFile, to: string): Promise<void> {
     await copyFile(from.hostPath, to, constants.COPYFILE_EXCL);
   }
   try {
-    if (!(await landedInside(from.policy, to))) throw OUTSIDE;
+    if (!(await landedInside(from.policy, to)))
+      throw new FenceError(`"${to}" landed outside the writable roots`);
     await assertUnchanged(from);
     await unlink(from.hostPath);
   } catch (error) {
@@ -135,12 +137,11 @@ async function moveNoReplace(from: WritableFile, to: string): Promise<void> {
  * move one regular file. Missing destination folders are created. Answers
  * `200 { absolutePath }` with the new path; 409 when the destination exists.
  */
-export async function handleRenameFile(ctx: SaveContext, request: Request): Promise<Response> {
-  if (request.method !== 'POST') return fail(405, 'POST only');
-  try {
+export function handleRenameFile(ctx: SaveContext, request: Request): Promise<Response> {
+  return handlePost(request, fail, mutationStatus, async () => {
     const input = await parseEntry(request);
     if (input instanceof Response) return input;
-    const destination = destinationOf(input.path, input.body.destination);
+    const destination = destinationOf(input.path, input.destination);
     if (destination === undefined) return fail(400, 'invalid destination');
     const { signal } = request;
     const source = await writableFile(ctx, input, signal);
@@ -148,7 +149,7 @@ export async function handleRenameFile(ctx: SaveContext, request: Request): Prom
     if (destination === source.hostPath) return json(200, { absolutePath: destination });
     if (ctx.fs.processPathFromHostPath(destination) === undefined)
       return fail(422, 'path has no verified Host path');
-    await assertWritable(source.policy, destination, { root: false });
+    await assertWritable(source.policy, destination);
     signal.throwIfAborted();
     const parent = dirname(destination);
     const first = await mkdir(parent, { recursive: true });
@@ -160,19 +161,15 @@ export async function handleRenameFile(ctx: SaveContext, request: Request): Prom
       throw error;
     }
     return json(200, { absolutePath: destination });
-  } catch (error) {
-    if (request.signal.aborted) return fail(499, 'cancelled');
-    return fail(errorStatus(error));
-  }
+  });
 }
 
 /**
  * Handle POST /api/delete.file `{ sessionId, path }`: delete one regular
  * file. Answers `200 { absolutePath }`. Folders are not deleted here.
  */
-export async function handleDeleteFile(ctx: SaveContext, request: Request): Promise<Response> {
-  if (request.method !== 'POST') return fail(405, 'POST only');
-  try {
+export function handleDeleteFile(ctx: SaveContext, request: Request): Promise<Response> {
+  return handlePost(request, fail, mutationStatus, async () => {
     const input = await parseEntry(request);
     if (input instanceof Response) return input;
     const { signal } = request;
@@ -183,8 +180,5 @@ export async function handleDeleteFile(ctx: SaveContext, request: Request): Prom
     await assertUnchanged(target);
     await unlink(target.hostPath);
     return json(200, { absolutePath: target.hostPath });
-  } catch (error) {
-    if (request.signal.aborted) return fail(499, 'cancelled');
-    return fail(errorStatus(error));
-  }
+  });
 }
