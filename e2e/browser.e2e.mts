@@ -1,7 +1,8 @@
 /**
  * Opt-in browser end-to-end suite: `npm run test:e2e`.
  *
- * Drives dist/client.js and the real save route in headless Chromium against the
+ * Drives dist/client.js and the plugin's real Host routes (save, download, create,
+ * rename, delete; over a fake Harness fs) in headless Chromium against the
  * REAL Monaco build on jsDelivr (needs internet), including a CDN-blocked
  * run, edit conflicts and the iframe sandbox isolation. Not part of
  * `npm test` / CI because it needs a browser and network.
@@ -83,7 +84,7 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
 :root{--dsw-alias-bg-layer-1:#fff;--dsw-alias-label-primary:#111;--dsw-alias-border-l2:#ccc}
 html,body{margin:0;height:100%} #root{width:600px;height:500px}</style></head><body><div id="root"></div>
 <script src="/react.js"></script><script src="/react-dom.js"></script><script src="/ft.js"></script>
-<script>window.__regs=[];window.__opened=[];window.__closeHandlers={};window.__tabTypes=[];
+<script>window.__ws=${JSON.stringify(dir)};window.__regs=[];window.__opened=[];window.__closeHandlers={};window.__tabTypes=[];
 window.__ModuleLoader__={load:(m)=>{window.__mod=m;}};</script>
 <script src="/client.js"></script>
 <script>
@@ -95,7 +96,7 @@ const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
  sidebarRightTabs:{register:(d)=>{window.__tabTypes.push(d);return()=>{}}},
  theme:{getTheme:()=>({active:{colorScheme:params.get('dark')?'dark':'light'}})},
  on:()=>()=>{},
- remote:{workspaceFiles:{readBytes:async(sessionId,path)=>{
+ remote:{workspaceFiles:{stat:async(sessionId,path)=>({ok:true,value:{absolutePath:path.startsWith('/')?path:window.__ws+'/'+path}}),readBytes:async(sessionId,path)=>{
    const r=await fetch('/fs/read?path='+encodeURIComponent(path)); if(r.status===404) return {ok:false,error:{code:'workspace-file/not-found'}};
    const j=await r.json(); const bin=atob(j.b64); const data=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)data[i]=bin.charCodeAt(i);
    return {ok:true,value:{data,eof:true,bytes:data.length,version:j.version,absolutePath:path}};}}},
@@ -570,6 +571,64 @@ await check(
     await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
     assert.throws(() => readFileSync(f));
     assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['p9']);
+  },
+);
+
+await check(
+  'Rename/Delete only touch tabs of THIS file: a relative tab of a same-named file elsewhere is kept',
+  async (page) => {
+    mkdirSync(join(dir, 'twin'), { recursive: true });
+    const f = join(dir, 'twin', 'same.txt');
+    writeFileSync(f, 's');
+    writeFileSync(join(dir, 'same.txt'), 'other');
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(f)}`);
+    await page.evaluate(
+      ([mine, other]: string[]) => {
+        (window as any).__tabs = [
+          { id: 'mine', kind: 'text', contentId: mine },
+          { id: 'other', kind: 'text', contentId: other },
+        ];
+      },
+      [fileAddr('twin/same.txt'), fileAddr('same.txt')],
+    );
+    await page.click('[data-delete-file] button');
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.throws(() => readFileSync(f));
+    assert.equal(readFileSync(join(dir, 'same.txt'), 'utf8'), 'other');
+    assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['mine']);
+  },
+);
+
+await check(
+  'New file: Host errors get specific messages (gone folder, gone session)',
+  async (page) => {
+    await page.goto(`${base}/?what=newfile&abs=${encodeURIComponent(join(dir, 'no-such-dir'))}`);
+    const reply = (status: number, error: string) =>
+      page.route('**/api/create.file', (route: any) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ error }) }),
+      );
+    const alert = (re: RegExp) =>
+      page.waitForFunction(
+        (src: string) =>
+          new RegExp(src).test(
+            document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+          ),
+        re.source,
+      );
+    await page.click('[data-new-file]');
+    await reply(404, 'not found');
+    await page.fill('[data-dlf-dialog] input', 'x.txt');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await alert(/create\.noFolder/);
+    await page.unroute('**/api/create.file');
+    await reply(404, 'session not found');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await alert(/mutation\.noSession/);
+    await page.unroute('**/api/create.file');
+    await reply(422, 'path has no verified Host path');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await alert(/mutation\.unmapped/);
   },
 );
 

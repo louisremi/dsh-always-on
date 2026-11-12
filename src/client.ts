@@ -124,6 +124,9 @@ window.__ModuleLoader__.load({
       'rename.hint': 'Use / to move it into a folder, or type an absolute path.',
       'rename.confirm': 'Rename',
       'rename.missing': 'The file no longer exists.',
+      'create.noFolder': 'That folder no longer exists.',
+      'mutation.noSession': 'This session no longer exists.',
+      'mutation.unmapped': 'Not possible here: this file is not on the Harness host.',
       'delete.title': 'Delete file',
       'delete.question': 'Delete {name}? This cannot be undone.',
       'delete.confirm': 'Delete',
@@ -168,6 +171,9 @@ window.__ModuleLoader__.load({
       'rename.hint': '可用 / 移动到文件夹中，或输入绝对路径。',
       'rename.confirm': '重命名',
       'rename.missing': '文件已不存在。',
+      'create.noFolder': '该文件夹已不存在。',
+      'mutation.noSession': '此会话已不存在。',
+      'mutation.unmapped': '此处无法操作：该文件不在 Harness 主机上。',
       'delete.title': '删除文件',
       'delete.question': '要删除 {name} 吗？此操作无法撤销。',
       'delete.confirm': '删除',
@@ -547,10 +553,22 @@ window.__ModuleLoader__.load({
         .every((s) => s.length > 0 && s !== '.' && s !== '..' && s.trim() === s);
     }
 
-    /** Message key for a failed mutation response. */
-    function mutationErrorKey(status: number): string {
+    /**
+     * Message key for a failed mutation response. A 404 means a missing session
+     * (the Host says so in `error`), else the folder a create targets or the
+     * file a rename/delete acts on.
+     */
+    function mutationErrorKey(
+      response: { status: number; body: any },
+      target: 'folder' | 'file',
+    ): string {
+      const { status, body } = response;
       if (status === 409) return 'create.exists';
-      if (status === 404) return 'rename.missing';
+      if (status === 404) {
+        if (body?.error === 'session not found') return 'mutation.noSession';
+        return target === 'folder' ? 'create.noFolder' : 'rename.missing';
+      }
+      if (status === 422) return 'mutation.unmapped';
       if (status === 400) return 'create.invalid';
       if (status === 403) return 'create.denied';
       return 'create.failed';
@@ -761,7 +779,7 @@ window.__ModuleLoader__.load({
                   name,
                 },
               );
-              if (!res.ok) return mutationErrorKey(res.status);
+              if (!res.ok) return mutationErrorKey(res, 'folder');
               if (kind === 'file') {
                 try {
                   sidebarRight.openResource(sessionFileAddress(sessionId, res.body.absolutePath), {
@@ -780,20 +798,42 @@ window.__ModuleLoader__.load({
     /**
      * Open sidebar tabs (preview or editor) showing a Host file. Tab addresses
      * hold an absolute path or one relative to the session's workspace, which
-     * the browser does not know, so a relative path matches by suffix.
+     * the browser does not know. A relative path whose suffix fits is resolved
+     * by the Host (`workspaceFiles.stat`), so `a.txt` never matches
+     * `/ws/sub/a.txt`. Only on a Harness without that call does the suffix
+     * alone decide, erring towards "this file".
      */
-    function tabsShowing(sidebarRight: SidebarRight, sessionId: string, absolutePath: string) {
+    async function tabsShowing(
+      sidebarRight: SidebarRight,
+      remote: { workspaceFiles: RemoteWorkspaceFiles },
+      sessionId: string,
+      absolutePath: string,
+    ) {
       let tabs: readonly { id: string; kind: string; contentId: string }[] = [];
       try {
         tabs = sidebarRight.tabsIn?.(sessionId) ?? [];
       } catch {
         return [];
       }
-      return tabs.filter((tab) => {
-        const path = parseFileAddress(tab.contentId)?.path;
-        if (path === undefined) return false;
-        return path.startsWith('/') ? path === absolutePath : absolutePath.endsWith(`/${path}`);
-      });
+      const shows = async (path: string) => {
+        if (path.startsWith('/')) return path === absolutePath;
+        if (!absolutePath.endsWith(`/${path}`)) return false;
+        const stat = remote.workspaceFiles.stat;
+        if (typeof stat !== 'function') return true;
+        try {
+          const result = await stat.call(remote.workspaceFiles, sessionId, path);
+          return result.ok && result.value.absolutePath === absolutePath;
+        } catch {
+          return false;
+        }
+      };
+      const matches = await Promise.all(
+        tabs.map((tab) => {
+          const path = parseFileAddress(tab.contentId)?.path;
+          return path === undefined ? false : shows(path);
+        }),
+      );
+      return tabs.filter((_tab, i) => matches[i]);
     }
 
     /** Close the given tabs; best effort (a newer Harness may lack closeIn). */
@@ -812,23 +852,24 @@ window.__ModuleLoader__.load({
       sessionId,
       absolutePath,
       sidebarRight,
+      remote,
       t,
     }: {
       sessionId?: unknown;
       absolutePath?: unknown;
       sidebarRight: SidebarRight;
+      remote: { workspaceFiles: RemoteWorkspaceFiles };
       t: Translate;
     }) {
       const [open, setOpen] = React.useState(undefined);
       if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
       const name = baseName(absolutePath);
-      /** Error key when an editor holds unsaved edits of this file. */
-      const dirtyEditor = () =>
-        tabsShowing(sidebarRight, sessionId, absolutePath).some((tab) =>
-          dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)),
-        )
-          ? 'entry.dirty'
-          : undefined;
+      /** This file's open tabs, and the error key when one holds unsaved edits. */
+      const fileTabs = async () => {
+        const tabs = await tabsShowing(sidebarRight, remote, sessionId, absolutePath);
+        const dirty = tabs.some((tab) => dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)));
+        return { ids: tabs.map((tab) => tab.id), blocked: dirty ? 'entry.dirty' : undefined };
+      };
       const button = (kind: 'rename' | 'delete') => {
         const label = t(kind === 'rename' ? 'rename.title' : 'delete.title');
         return h(
@@ -866,17 +907,14 @@ window.__ModuleLoader__.load({
             t,
             onClose: () => setOpen(undefined),
             submit: async (destination: string) => {
-              const blocked = dirtyEditor();
+              const { ids: before, blocked } = await fileTabs();
               if (blocked !== undefined) return blocked;
-              const before = tabsShowing(sidebarRight, sessionId, absolutePath).map(
-                (tab) => tab.id,
-              );
               const res = await postJson(RENAME_FILE_ROUTE, {
                 sessionId,
                 path: absolutePath,
                 destination,
               });
-              if (!res.ok) return mutationErrorKey(res.status);
+              if (!res.ok) return mutationErrorKey(res, 'file');
               if (res.body.absolutePath !== absolutePath) {
                 closeTabs(sidebarRight, sessionId, before);
                 try {
@@ -901,13 +939,10 @@ window.__ModuleLoader__.load({
             t,
             onClose: () => setOpen(undefined),
             submit: async () => {
-              const blocked = dirtyEditor();
+              const { ids: before, blocked } = await fileTabs();
               if (blocked !== undefined) return blocked;
-              const before = tabsShowing(sidebarRight, sessionId, absolutePath).map(
-                (tab) => tab.id,
-              );
               const res = await postJson(DELETE_FILE_ROUTE, { sessionId, path: absolutePath });
-              if (!res.ok) return mutationErrorKey(res.status);
+              if (!res.ok) return mutationErrorKey(res, 'file');
               closeTabs(sidebarRight, sessionId, before);
               return undefined;
             },
@@ -1351,6 +1386,12 @@ window.__ModuleLoader__.load({
     };
 
     interface RemoteWorkspaceFiles {
+      /** Absolute path of a workspace file; optional on older Harnesses. */
+      stat?(
+        sessionId: string,
+        path: string,
+        signal?: AbortSignal,
+      ): Promise<{ ok: true; value: { absolutePath: string } } | { ok: false }>;
       readBytes(
         sessionId: string,
         path: string,
@@ -1841,6 +1882,7 @@ window.__ModuleLoader__.load({
                   sessionId: props.sessionId,
                   absolutePath: props.absolutePath,
                   sidebarRight: ctx.sidebarRight,
+                  remote: ctx.remote,
                   t,
                 }),
               )
