@@ -4,14 +4,18 @@ A DeepSeek Harness plugin for harnesses running in a container with no access to
 
 ## Development
 
-```bash
-npm run build     # tsc for server + client bundles into dist/
-npm run check     # typecheck both, no emit
-npm run lint      # biome check
-npm run test      # node --test on test/*.test.ts
+The source is TypeScript. `npm run build` compiles `src/` to `dist/`; the tests run `.ts` files through Node's native type stripping, so **developing** needs Node ≥ 22.18 (or ≥ 23.6), while the plugin itself only requires Node ≥ 20 at runtime.
+
+```sh
+npm ci
+npm run check      # typecheck src, tests and e2e (no emit)
+npm run build      # compile src/ to dist/
+npm run lint       # biome check
+npm test           # host route unit tests (no browser needed)
+npm run test:e2e   # opt-in: real headless Chromium + real Monaco from the CDN
 ```
 
-The client bundle is injected into the DSH web app; see `README.md` for how the CDN and `dsh.bundle.patch` wiring work.
+Changes land on `main` as pull requests, so each GitHub Release can describe itself — see **Releasing** in `README.md`. The client bundle is injected into the DSH web app; `README.md` explains the CDN and `cordis.patch.yml` wiring.
 
 ## Agent skills
 
