@@ -18,12 +18,12 @@ Edit the "Label in our tracker" column to match whatever vocabulary you actually
 
 `dsh-always-on` also runs a maintainer agent that drives issues through its own pipeline. Those labels are **separate** from the five triage roles above and are not managed by `/triage`. Don't reuse, rename, or clear them from a triage skill run:
 
-| Label                           | Meaning                                                        |
-| ------------------------------- | -------------------------------------------------------------- |
-| `agent-fix`                     | The maintainer agent has claimed this issue to work a fix       |
-| `agent-in-progress`             | Work is underway                                                 |
-| `agent-rereview`                | Back for another review pass                                   |
-| `agent-drafting-pr-in-progress` | A PR draft is being prepared                                   |
-| `no-agent`                      | Explicitly excluded from agent pickup                          |
+| Label                           | Meaning                                                   |
+| ------------------------------- | --------------------------------------------------------- |
+| `agent-fix`                     | The maintainer agent has claimed this issue to work a fix |
+| `agent-in-progress`             | Work is underway                                          |
+| `agent-rereview`                | Back for another review pass                              |
+| `agent-drafting-pr-in-progress` | A PR draft is being prepared                              |
+| `no-agent`                      | Explicitly excluded from agent pickup                     |
 
 So `ready-for-agent` here means "a human has judged this issue ready for agentic work". The maintainer agent's `agent-*` labels then record what it actually did with it. A `needs-human` issue is out of that pipeline: leave the existing label in place and don't try to convert it.
