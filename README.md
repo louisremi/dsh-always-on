@@ -79,6 +79,16 @@ Found a security problem? Please [open an issue](https://github.com/louisremi/ds
 - Edit: text files up to 1 MiB; no multi-user locking beyond the on-disk version check.
 - Tested with DSH `0.2.2-alpha.2`. It depends on the stock `open-in-app` and `sidebar-right` plugins' slot names and public API.
 
+## TODO
+
+Folder operations are not possible yet: only files can be renamed, moved, deleted and downloaded. Creating a folder works. Tracked in [#22](https://github.com/louisremi/dsh-always-on/issues/22), which explains what holds them back and how they could be built.
+
+- [ ] **Rename or move a folder.** Node has no rename that refuses to replace an existing entry (it silently replaces an empty destination folder), and folders can't be hard-linked like files.
+- [ ] **Delete a folder.** An empty folder is easy. A whole tree needs a size-aware confirmation, protection against emptying a mounted volume, and checks for unsaved edits in any file inside. There is no undo.
+- [ ] **Download a folder** as a `.zip` or `.tar` archive.
+
+All three also need a place in the UI: the Files tree of DSH `0.2.2-alpha.2` has no per-folder button or menu. DSH `0.2.2-rc.1` adds a right-click menu on tree rows that plugins can extend, so this work follows a move to that version.
+
 ## Development
 
 The source is TypeScript; `npm run build` compiles it to `dist/` (it also runs automatically via `prepare` on install and pack). The tests run `.ts` files directly through Node's native type stripping, so **developing** needs Node ≥ 22.18 (or ≥ 23.6) — the plugin itself still only requires Node ≥ 20 at runtime.
