@@ -3,7 +3,6 @@
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin for running your Harness in a container, where it has **no access to your local file system**.
 
 Run the Harness in a Docker container — on a NAS, a server, anywhere — and it lives on a machine of its own: the stock "show file location" and "Open in app" buttons would have to reach a desktop that isn't there, and nothing inside the container can read or write your computer's files. Your browser is the only connection between you and your files. This plugin makes it enough, replacing the dead buttons with things that work through it:
-
 - **Download file** buttons that save a file to your computer.
 - **Show files**, which opens the sidebar file explorer.
 - **Edit**, which opens a text file in an in-sidebar code editor ([Monaco](https://microsoft.github.io/monaco-editor/), the editor behind VS Code) and saves it back to the Harness host.
@@ -27,7 +26,6 @@ Nothing to configure.
 **Show files.** The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
 
 **Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
-
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
 - If the file changed on disk after you opened it, saving is refused and you choose **Reload from disk**, **Overwrite**, or **Keep editing**. Nothing is overwritten silently.
 - Closing a tab (or the browser page) with unsaved changes asks for confirmation.
@@ -42,7 +40,6 @@ The plugin adds two authenticated routes to the Harness, `GET /api/download.file
 ### The editor and the CDN
 
 To keep the package small (~69 kB), Monaco is **not bundled**. On the first Edit it is loaded from [jsDelivr](https://www.jsdelivr.com/) at a pinned version (`monaco-editor@0.52.2`).
-
 - It runs in a **sandboxed iframe** (`sandbox="allow-scripts"`, no `allow-same-origin`) with a Content-Security-Policy that only permits the CDN. The CDN's code therefore cannot read the Harness page, your session cookie, local storage, or call the Harness API; it only exchanges messages with the editor wrapper.
 - The loader script is checked with Subresource Integrity (SRI). Files the loader then pulls in are not individually pinned by hash, which is why the isolation above matters.
 - **Your browser needs internet access to `cdn.jsdelivr.net`** (the Harness host does not). If it is unreachable or blocked, the editor falls back to a plain `<textarea>` with the same save, conflict and dirty-state behaviour, and says so.
@@ -77,7 +74,6 @@ dsh plugin --profile web remove @louisremi/dsh-always-on
 ## Releasing
 
 Changes land on `main` as pull requests, so each GitHub Release can describe itself: create a release with an empty description and the **Release notes** workflow fills it from everything merged since the previous release (`.github/release.yml` controls the categorization).
-
 1. Bump `version` in `package.json` and push (via PR).
 2. Publish a GitHub Release whose tag matches the version: `gh release create vX.Y.Z`.
 3. The **Publish to npm** workflow then runs on release publish: it checks the tag against `package.json`, lints, type-checks, tests, and publishes to npm with provenance through [trusted publishing](https://docs.npmjs.com/trusted-publishers) — no tokens stored in the repo. If the version is already in the registry (the very first publish of a package has to be done manually, since trusted publishing is configured on the package page), the workflow skips the publish.
