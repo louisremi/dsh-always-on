@@ -543,7 +543,7 @@ window.__ModuleLoader__.load({
 
     // ───────────────────────── dialogs & mutations ─────────────────────────
 
-    /** Same rule as the Host's nameSegments() in src/create-route.ts. */
+    /** Same rule as the Host's nameSegments() in src/paths.ts. */
     function validName(name: string): boolean {
       if (name.length === 0 || name.length > 1024) return false;
       // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
@@ -726,6 +726,26 @@ window.__ModuleLoader__.load({
       return ReactDOM?.createPortal ? ReactDOM.createPortal(dialog, document.body) : dialog;
     }
 
+    /** What differs between New file and New folder. */
+    const CREATE_KINDS = {
+      file: {
+        label: 'create.file',
+        hint: 'create.fileHint',
+        marker: 'data-new-file',
+        icon: NewFileIcon,
+        route: CREATE_FILE_ROUTE,
+        opensEditor: true,
+      },
+      folder: {
+        label: 'create.folder',
+        hint: 'create.folderHint',
+        marker: 'data-new-folder',
+        icon: NewFolderIcon,
+        route: CREATE_FOLDER_ROUTE,
+        opensEditor: false,
+      },
+    } as const;
+
     /**
      * "New file" / "New folder" in the Files tab toolbar. A new file opens in
      * the editor; a new folder simply appears in the tree (it watches the disk).
@@ -737,7 +757,7 @@ window.__ModuleLoader__.load({
       sidebarRight,
       t,
     }: {
-      kind: 'file' | 'folder';
+      kind: keyof typeof CREATE_KINDS;
       sessionId?: unknown;
       absolutePath?: unknown;
       sidebarRight: SidebarRight;
@@ -745,7 +765,8 @@ window.__ModuleLoader__.load({
     }) {
       const [open, setOpen] = React.useState(false);
       if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
-      const label = t(kind === 'file' ? 'create.file' : 'create.folder');
+      const spec = CREATE_KINDS[kind];
+      const label = t(spec.label);
       return h(
         React.Fragment,
         null,
@@ -756,31 +777,24 @@ window.__ModuleLoader__.load({
             className: 'dlf-tool',
             title: label,
             'aria-label': label,
-            [kind === 'file' ? 'data-new-file' : 'data-new-folder']: '',
+            [spec.marker]: '',
             onClick: () => setOpen(true),
           },
-          h(kind === 'file' ? NewFileIcon : NewFolderIcon, { size: 16 }),
+          h(spec.icon, { size: 16 }),
         ),
         open &&
           h(NameDialog, {
             title: label,
             where: absolutePath,
-            hint: t(kind === 'file' ? 'create.fileHint' : 'create.folderHint'),
+            hint: t(spec.hint),
             initial: '',
             confirm: t('create.create'),
             t,
             onClose: () => setOpen(false),
             submit: async (name: string) => {
-              const res = await postJson(
-                kind === 'file' ? CREATE_FILE_ROUTE : CREATE_FOLDER_ROUTE,
-                {
-                  sessionId,
-                  directory: absolutePath,
-                  name,
-                },
-              );
+              const res = await postJson(spec.route, { sessionId, directory: absolutePath, name });
               if (!res.ok) return mutationErrorKey(res, 'folder');
-              if (kind === 'file') {
+              if (spec.opensEditor) {
                 try {
                   sidebarRight.openResource(sessionFileAddress(sessionId, res.body.absolutePath), {
                     kind: EDITOR_KIND,
@@ -847,6 +861,12 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** What differs between the Rename and Delete toolbar buttons. */
+    const ENTRY_KINDS = {
+      rename: { label: 'rename.title', marker: 'data-rename-file', icon: RenameIcon },
+      delete: { label: 'delete.title', marker: 'data-delete-file', icon: DeleteIcon },
+    } as const;
+
     /** Rename/move and Delete for the file shown in the sidebar preview. */
     function EntryButtons({
       sessionId,
@@ -870,14 +890,15 @@ window.__ModuleLoader__.load({
         const dirty = tabs.some((tab) => dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)));
         return { ids: tabs.map((tab) => tab.id), blocked: dirty ? 'entry.dirty' : undefined };
       };
-      const button = (kind: 'rename' | 'delete') => {
-        const label = t(kind === 'rename' ? 'rename.title' : 'delete.title');
+      const button = (kind: keyof typeof ENTRY_KINDS) => {
+        const spec = ENTRY_KINDS[kind];
+        const label = t(spec.label);
         return h(
           'div',
           {
             className: 'dlf-split',
             'data-size': 'compact',
-            [kind === 'rename' ? 'data-rename-file' : 'data-delete-file']: '',
+            [spec.marker]: '',
           },
           h(
             'button',
@@ -888,7 +909,7 @@ window.__ModuleLoader__.load({
               'aria-label': label,
               onClick: () => setOpen(kind),
             },
-            h(kind === 'rename' ? RenameIcon : DeleteIcon, { size: 13 }),
+            h(spec.icon, { size: 13 }),
           ),
         );
       };
