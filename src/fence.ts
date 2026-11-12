@@ -2,13 +2,20 @@
  * The plugin's own write fence for every mutation it performs: creating,
  * renaming, moving and deleting entries.
  *
- * Saves additionally go through `ctx.fs.writeText` with the session policy,
- * which a sandboxing backend (`dsh-fs-sandbox`) enforces itself. But a
- * deployment may run the bare local backend, which ignores the policy, and
- * some operations (mkdir, rename, unlink) have no `ctx.fs` primitive at all.
- * So the fence is applied here, independently of the backend, and is
- * deliberately NARROWER than the agent's `workspace-write`: only the
- * workspace root and its explicit extra writable roots, never the temp areas.
+ * Writes also go through `ctx.fs.writeText` with the session policy where
+ * they can, which a sandboxing backend (`dsh-fs-sandbox`) enforces itself.
+ * But a deployment may run the bare local backend, which ignores the policy,
+ * and some operations (mkdir, rename, unlink) have no `ctx.fs` primitive at
+ * all. So the fence is applied here, independently of the backend, to saves
+ * too. For creating, renaming and deleting it is deliberately NARROWER than
+ * the agent's `workspace-write`: only the workspace root and its explicit
+ * extra writable roots, never the temp areas. Saves (`temp: true`) get
+ * exactly the agent's grant, temp areas included.
+ *
+ * A check is a snapshot: an ancestor directory swapped for a symlink right
+ * after it can still redirect the operation. So the routes that create an
+ * entry check again where it landed and undo it when it is outside
+ * ({@link landedInside}).
  *
  *  - `read-only`          → nothing is writable.
  *  - `workspace-write`    → only paths that canonicalize under a workspace root.
@@ -16,6 +23,7 @@
  *  - any other mode       → nothing (unknown means no).
  */
 import { lstat, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { SandboxPolicy } from './context.ts';
 
@@ -75,31 +83,70 @@ async function workspaceRoots(policy: SandboxPolicy): Promise<string[]> {
   return roots;
 }
 
+/** The temp areas the Harness grants in `workspace-write` (`/tmp` and the OS temp dir). */
+async function tempRoots(): Promise<string[]> {
+  const roots: string[] = [];
+  for (const root of ['/tmp', tmpdir()]) {
+    try {
+      roots.push(await realpath(root));
+    } catch {
+      /* absent on this platform */
+    }
+  }
+  return roots;
+}
+
+/** How a fence check differs from the default (workspace roots, roots included). */
+export interface FenceOptions {
+  /** `false`: also refuse the workspace roots themselves (they may only be
+   *  written inside, never renamed or deleted). */
+  root?: boolean;
+  /** Also grant the temp areas, exactly like the agent's own `workspace-write`.
+   *  Saves use it: they only replace files that already exist. */
+  temp?: boolean;
+}
+
 /**
  * Whether the session may change the entry at `path`.
  * @param policy - the session's sandbox policy (never widened by the caller).
  * @param path - absolute Host path of the entry to create, change or remove.
- * @param options.root - also refuse the workspace roots themselves (they may
- *   only be written inside, never renamed or deleted).
+ * @param options - see {@link FenceOptions}.
  */
 export async function mayWrite(
   policy: SandboxPolicy,
   path: string,
-  options: { root?: boolean } = {},
+  options: FenceOptions = {},
 ): Promise<boolean> {
   if (policy.mode === 'danger-full-access') return true;
   if (policy.mode !== 'workspace-write') return false;
   const target = await canonicalPath(path);
   const roots = await workspaceRoots(policy);
   if (options.root === false && roots.includes(target)) return false;
+  if (options.temp === true) roots.push(...(await tempRoots()));
   return roots.some((root) => isUnder(target, root));
+}
+
+/**
+ * Whether an entry that was just created at `path` really is where the fence
+ * allowed it: its parent directory, resolved through symlinks NOW, is still a
+ * writable place for the session. Catches an ancestor swapped for a symlink
+ * between the check and the call.
+ */
+export async function landedInside(policy: SandboxPolicy, path: string): Promise<boolean> {
+  if (policy.mode === 'danger-full-access') return true;
+  try {
+    const parent = await realpath(dirname(path));
+    return await mayWrite(policy, join(parent, basename(path)), { root: false });
+  } catch {
+    return false;
+  }
 }
 
 /** {@link mayWrite}, throwing {@link FenceError} on refusal. */
 export async function assertWritable(
   policy: SandboxPolicy,
   path: string,
-  options: { root?: boolean } = {},
+  options: FenceOptions = {},
 ): Promise<void> {
   if (!(await mayWrite(policy, path, options))) {
     throw new FenceError(`"${path}" is not writable in ${policy.mode} mode`);

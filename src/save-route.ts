@@ -1,6 +1,8 @@
+import { realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { SaveContext, SaveRegisterContext, WriteIntent } from './context.ts';
 import { failureStatus } from './download-route.ts';
+import { assertWritable } from './fence.ts';
 import { policyFor } from './session-policy.ts';
 
 export const SAVE_PATH = '/api/save.file';
@@ -67,7 +69,10 @@ async function parse(request: Request): Promise<SaveInput | Response> {
  * Handle POST /api/save.file: replace a UTF-8 text file the Session can reach,
  * only if it is unchanged since the version the editor read (or `force`).
  * The write runs through `ctx.fs.writeText` with the Session's sandbox policy,
- * so read-only mode and workspace boundaries are enforced by the Harness.
+ * after the plugin's own fence (src/fence.ts) with the agent's grant (temp
+ * areas included), so read-only mode and workspace boundaries hold even on a
+ * backend that does not enforce the policy. A save replaces the file a
+ * symlink points to, so the fence judges that file, not the link.
  */
 export async function handleSave(ctx: SaveContext, request: Request): Promise<Response> {
   if (request.method !== 'POST') return fail(405, 'POST only');
@@ -88,6 +93,7 @@ export async function handleSave(ctx: SaveContext, request: Request): Promise<Re
     const info = await fs.stat(target, signal);
     if (info === undefined) return fail(404);
     if (info.type !== 'file') return fail(403, 'not a regular file');
+    await assertWritable(policy, await realpath(absolutePath), { temp: true });
 
     // parse() guarantees a non-empty expectedVersion whenever force is false.
     const intent: WriteIntent | undefined =

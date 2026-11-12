@@ -16,6 +16,8 @@ export interface SandboxPolicy {
 /** A resolved Host path (the value ctx.fs.resolve hands back). */
 export interface FsTarget {
   displayPath?: string | undefined;
+  /** The backend's canonical identity; a Host path for the local backends. */
+  targetKey?: string | undefined;
 }
 
 export interface FsInfo {

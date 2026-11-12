@@ -1,8 +1,8 @@
-import { mkdir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { mkdir, rmdir } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { SaveContext, SaveRegisterContext } from './context.ts';
 import { failureStatus } from './download-route.ts';
-import { assertWritable } from './fence.ts';
+import { assertWritable, landedInside } from './fence.ts';
 import { policyFor } from './session-policy.ts';
 
 export const CREATE_FILE_PATH = '/api/create.file';
@@ -31,6 +31,37 @@ export function json(status: number, body: unknown): Response {
 export function fail(status: number, message?: string): Response {
   return json(status, { error: message ?? FAIL_MESSAGE[status] ?? 'failed' });
 }
+
+/** Status for a Node fs error from a mutation, or the shared Harness mapping. */
+export function errorStatus(error: unknown): number {
+  const code = (error as { code?: string }).code;
+  if (code === 'EEXIST') return 409;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return 404;
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return 403;
+  return failureStatus(error);
+}
+
+/**
+ * Remove the directories a `mkdir(deepest, { recursive: true })` created,
+ * deepest first, up to and including `first` (its return value). Best effort
+ * and non-recursive: only empty directories go.
+ */
+export async function undoMkdir(deepest: string, first: string | undefined): Promise<void> {
+  if (first === undefined) return;
+  for (let dir = deepest; ; dir = dirname(dir)) {
+    try {
+      await rmdir(dir);
+    } catch {
+      return;
+    }
+    if (dir === first || dirname(dir) === dir) return;
+  }
+}
+
+/** Thrown when a created entry turned out to be outside the fence. */
+export const OUTSIDE = Object.assign(new Error('landed outside the writable roots'), {
+  code: 'FS_SANDBOX_DENIED',
+});
 
 /**
  * Validate a user-typed name, relative to a directory. `a/b.txt` is allowed
@@ -110,8 +141,8 @@ export async function handleCreateFile(ctx: SaveContext, request: Request): Prom
  * Handle POST /api/create.folder: create a directory (and missing parents) in
  * a directory the session may write to. `ctx.fs` has no mkdir, so this is a
  * plain `mkdir` on the Host path, guarded by the plugin's write fence
- * (src/fence.ts), which re-canonicalizes the path through symlinks right
- * before the call. An existing entry of any kind at the final name is a 409.
+ * (src/fence.ts) before the call and checked again after it. An existing
+ * entry of any kind at the final name is a 409, and leaves no new parents.
  * Only possible when the Harness filesystem is the Host's own (a verified
  * Host mapping), which is also what downloads require.
  */
@@ -127,20 +158,28 @@ export async function handleCreateFolder(ctx: SaveContext, request: Request): Pr
     const hostPath = join(input.directory, ...input.segments);
     const processPath = ctx.fs.processPathFromHostPath(hostPath);
     if (processPath === undefined) return fail(422, 'path has no verified Host path');
-    // The fence checks the canonical path (symlinked ancestors resolved), and
-    // the same Host path is created right after: no other path is touched.
+    // The fence checks the canonical path (symlinked ancestors resolved). An
+    // ancestor swapped for a symlink right after the check would redirect
+    // mkdir, so where the folder landed is checked again and undone if outside.
     await assertWritable(policy, hostPath, { root: false });
     signal.throwIfAborted();
-    const parent = join(hostPath, '..');
-    await mkdir(parent, { recursive: true });
-    // Non-recursive for the final name: EEXIST for anything already there.
-    await mkdir(hostPath);
+    const parent = dirname(hostPath);
+    const first = await mkdir(parent, { recursive: true });
+    try {
+      // Non-recursive for the final name: EEXIST for anything already there.
+      await mkdir(hostPath);
+    } catch (error) {
+      await undoMkdir(parent, first);
+      throw error;
+    }
+    if (!(await landedInside(policy, hostPath))) {
+      await undoMkdir(hostPath, first ?? hostPath);
+      throw OUTSIDE;
+    }
     return json(201, { absolutePath: hostPath });
   } catch (error) {
     if (request.signal.aborted) return fail(499, 'cancelled');
-    if ((error as { code?: string }).code === 'EEXIST') return fail(409);
-    if ((error as { code?: string }).code === 'EACCES') return fail(403);
-    return fail(failureStatus(error));
+    return fail(errorStatus(error));
   }
 }
 

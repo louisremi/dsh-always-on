@@ -9,6 +9,7 @@
  */
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -25,12 +26,13 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { Context } from '@deepseek-ai/cordis';
 import { WorkspaceFiles } from '@deepseek-ai/dsh-api-workspace-files';
+import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local';
 import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox';
 import type { DownloadContext, LiveSession, SaveContext } from '../src/context.ts';
-import { handleCreateFile, handleCreateFolder } from '../src/create-route.ts';
+import { handleCreateFile, handleCreateFolder, undoMkdir } from '../src/create-route.ts';
 import { handleDownload } from '../src/download-route.ts';
 import { handleDeleteFile, handleRenameFile } from '../src/entry-route.ts';
-import { canonicalPath, mayWrite } from '../src/fence.ts';
+import { canonicalPath, landedInside, mayWrite } from '../src/fence.ts';
 import { handleSave } from '../src/save-route.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
@@ -54,20 +56,29 @@ after(() => rmSync(base, { recursive: true, force: true }));
 
 type Mode = 'read-only' | 'workspace-write' | 'danger-full-access';
 
+interface HostOptions {
+  /** `local`: the bare dsh-fs-local backend, which ignores the policy. */
+  backend?: 'sandbox' | 'local';
+  /** Extra directories workspace-write may write under. */
+  extraRoots?: string[];
+}
+
 /** The Harness services the routes consume, built from the real packages. */
-function realHost(mode: Mode = 'workspace-write') {
+function realHost(mode: Mode = 'workspace-write', options: HostOptions = {}) {
   const policy = {
     defaultMode: mode,
     workspaceRoot: workspace,
     resolve: ({ session }: { session: LiveSession }) => ({
       mode,
       workspaceRoot: workspace,
+      additionalWritableRoots: options.extraRoots,
       sessionId: session.id,
     }),
   };
   const ctx = new Context();
   ctx.provide('sandboxPolicy', policy);
-  const fs = new SandboxedFileSystem(ctx, { cwd: workspace, diffBasisMaxBytes: 1 << 20 });
+  const Backend = options.backend === 'local' ? LocalFileSystem : SandboxedFileSystem;
+  const fs = new Backend(ctx, { cwd: workspace, diffBasisMaxBytes: 1 << 20 });
   const workspaceFiles = new WorkspaceFiles(ctx, {
     maxBytes: 2 << 20,
     maxFileBytes: 32 << 20,
@@ -81,7 +92,14 @@ function realHost(mode: Mode = 'workspace-write') {
     sandboxPolicy: policy,
     workspaceFiles: workspaceFiles as unknown as SaveContext['workspaceFiles'],
     sessions: { get: (id) => (id === 'sess' ? { id } : undefined) },
-    get: () => undefined,
+    // A session that is not running: its persisted workspace, the default mode.
+    get: (name) =>
+      name === 'sessionPersistence'
+        ? {
+            stat: async (id: string) =>
+              id === 'cold' ? { header: { cwd: workspace } } : undefined,
+          }
+        : undefined,
   };
   const download: DownloadContext = {
     fs: fs as unknown as DownloadContext['fs'],
@@ -435,5 +453,120 @@ test('fence: canonical paths and the narrow workspace-only grant', async () => {
   assert.equal(
     await mayWrite({ ...policy, additionalWritableRoots: [outside] }, join(outside, 'x')),
     true,
+  );
+});
+
+// ─────────────── review fixes: fence order, bare backend, races ───────────────
+
+test('rename/delete: a path outside the sandbox is a 403 whether or not it exists', async () => {
+  const host = realHost();
+  for (const path of [join(outside, 'missing.txt'), outside, join(outside, 'secret.txt')]) {
+    assert.equal((await remove(host.save, path)).status, 403, path);
+    assert.equal((await rename(host.save, path, join(workspace, 'x.txt'))).status, 403, path);
+  }
+  // read-only: refused before looking, so a missing file is a 403 too.
+  const ro = realHost('read-only').save;
+  assert.equal((await remove(ro, join(workspace, 'never-existed.txt'))).status, 403);
+});
+
+test('on the bare local backend (no policy enforcement) the plugin still fences saves', async () => {
+  const target = join(outside, 'bare.txt');
+  writeFileSync(target, 'keep');
+  const bare = realHost('workspace-write', { backend: 'local' }).save;
+  assert.equal((await save(bare, { path: target, content: 'pwned', force: true })).status, 403);
+  assert.equal(
+    (await save(bare, { path: 'escape.txt', content: 'pwned', force: true })).status,
+    403,
+  );
+  assert.equal(readFileSync(target, 'utf8'), 'keep');
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'secret\n');
+  const ro = realHost('read-only', { backend: 'local' }).save;
+  writeFileSync(join(workspace, 'bare-in.txt'), 'old');
+  assert.equal((await save(ro, { path: 'bare-in.txt', content: 'x', force: true })).status, 403);
+  assert.equal(
+    (await save(bare, { path: 'bare-in.txt', content: 'new', force: true })).status,
+    200,
+  );
+  assert.equal(readFileSync(join(workspace, 'bare-in.txt'), 'utf8'), 'new');
+  // The other mutations hold on the bare backend as well.
+  assert.equal((await create(bare, { directory: outside, name: 'b.txt' })).status, 403);
+  assert.equal((await createFolder(bare, { name: 'escape-dir/b' })).status, 403);
+  assert.ok(!existsSync(join(outside, 'b.txt')) && !existsSync(join(outside, 'b')));
+});
+
+test('saves keep the agent grant: temp areas stay writable, like for the agent', async () => {
+  const policy = { mode: 'workspace-write', workspaceRoot: workspace };
+  assert.equal(await mayWrite(policy, join(tmpdir(), 'x'), { temp: true }), true);
+  assert.equal(await mayWrite(policy, join(outside, 'x'), { temp: true }), false);
+});
+
+test('extra writable roots and cold sessions work at route level', async () => {
+  const extra = join(base, 'extra');
+  mkdirSync(extra, { recursive: true });
+  const host = realHost('workspace-write', { extraRoots: [extra] }).save;
+  assert.equal((await create(host, { directory: extra, name: 'e.txt' })).status, 201);
+  assert.equal((await createFolder(host, { directory: extra, name: 'e-dir' })).status, 201);
+  assert.equal((await rename(host, join(extra, 'e.txt'), 'e2.txt')).status, 200);
+  assert.equal((await remove(host, join(extra, 'e2.txt'))).status, 200);
+  // Without the extra root, the same directory is outside.
+  assert.equal((await create(realHost().save, { directory: extra, name: 'n.txt' })).status, 403);
+  // A session that is not running uses its persisted workspace.
+  writeFileSync(join(workspace, 'cold.txt'), 'c');
+  const cold = await entry(handleDeleteFile, realHost().save, {
+    sessionId: 'cold',
+    path: join(workspace, 'cold.txt'),
+  });
+  assert.equal(cold.status, 200);
+  assert.equal(
+    (await create(realHost().save, { sessionId: 'cold', name: 'cold2.txt' })).status,
+    201,
+  );
+});
+
+test('a created entry is checked where it landed (ancestor swapped for a symlink)', async () => {
+  const policy = { mode: 'workspace-write', workspaceRoot: workspace };
+  // What a mkdir through a swapped-in symlink produces: an entry that is
+  // physically outside although its path reads as inside.
+  mkdirSync(join(outside, 'landed'));
+  assert.equal(await landedInside(policy, join(workspace, 'escape-dir', 'landed')), false);
+  mkdirSync(join(workspace, 'fine'));
+  assert.equal(await landedInside(policy, join(workspace, 'fine')), true);
+  assert.equal(await landedInside({ ...policy, mode: 'danger-full-access' }, outside), true);
+  // The undo removes exactly what the recursive mkdir created.
+  mkdirSync(join(workspace, 'keep'));
+  const first = join(workspace, 'keep', 'n1');
+  mkdirSync(join(first, 'n2', 'n3'), { recursive: true });
+  await undoMkdir(join(first, 'n2', 'n3'), first);
+  assert.ok(!existsSync(first));
+  assert.ok(isDir(join(workspace, 'keep')));
+});
+
+test('a rename that cannot remove the old name is undone: one name, no new folders', async () => {
+  const host = realHost();
+  const locked = join(workspace, 'locked');
+  mkdirSync(locked);
+  const file = join(locked, 'u.txt');
+  writeFileSync(file, 'u');
+  chmodSync(locked, 0o555); // the link succeeds, removing the old name does not
+  try {
+    const res = await rename(host.save, file, join(workspace, 'nf1/nf2/u.txt'));
+    assert.equal(res.status, 403);
+    assert.equal(readFileSync(file, 'utf8'), 'u');
+    assert.ok(!existsSync(join(workspace, 'nf1')), 'created folders removed again');
+  } finally {
+    chmodSync(locked, 0o755);
+  }
+});
+
+test('Last-Modified is the served file, the one the Harness filesystem resolved', async () => {
+  const res = await download(realHost().download, join(workspace, 'escape.txt'));
+  assert.equal(res.status, 200);
+  assert.equal(
+    res.headers.get('last-modified'),
+    statSync(join(outside, 'secret.txt')).mtime.toUTCString(),
+  );
+  assert.equal(
+    res.headers.get('content-length'),
+    String(statSync(join(outside, 'secret.txt')).size),
   );
 });

@@ -16,10 +16,9 @@
 import { constants } from 'node:fs';
 import { copyFile, link, lstat, mkdir, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import type { SaveContext } from './context.ts';
-import { fail, json, nameSegments } from './create-route.ts';
-import { failureStatus } from './download-route.ts';
-import { assertWritable } from './fence.ts';
+import type { SandboxPolicy, SaveContext } from './context.ts';
+import { errorStatus, fail, json, nameSegments, OUTSIDE, undoMkdir } from './create-route.ts';
+import { assertWritable, landedInside } from './fence.ts';
 import { policyFor } from './session-policy.ts';
 
 export const RENAME_FILE_PATH = '/api/rename.file';
@@ -48,34 +47,48 @@ async function parseEntry(request: Request): Promise<EntryInput | Response> {
   return { sessionId, path, body: record };
 }
 
-/** Status for a Node fs error, or the shared Harness mapping. */
-function errorStatus(error: unknown): number {
-  const code = (error as { code?: string }).code;
-  if (code === 'EEXIST') return 409;
-  if (code === 'ENOENT' || code === 'ENOTDIR') return 404;
-  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return 403;
-  return failureStatus(error);
+/** The file a rename or delete acts on, as checked: path, policy and identity. */
+interface WritableFile {
+  hostPath: string;
+  policy: SandboxPolicy;
+  dev: number;
+  ino: number;
 }
 
 /**
  * The regular file at a request's `path`, checked writable for the session.
- * @returns its Host path, or a Response to answer with.
+ * The fence runs first, so a path the session may not touch is a 403 whether
+ * or not it exists.
+ * @returns the checked file, or a Response to answer with.
  */
 async function writableFile(
   ctx: SaveContext,
   input: EntryInput,
   signal: AbortSignal,
-): Promise<
-  { hostPath: string; policy: NonNullable<Awaited<ReturnType<typeof policyFor>>> } | Response
-> {
+): Promise<WritableFile | Response> {
   const policy = await policyFor(ctx, input.sessionId, signal);
   if (policy === undefined) return fail(404, 'session not found');
   if (ctx.fs.processPathFromHostPath(input.path) === undefined)
     return fail(422, 'path has no verified Host path');
+  await assertWritable(policy, input.path, { root: false });
   const info = await lstat(input.path);
   if (!info.isFile()) return fail(403, 'not a regular file');
-  await assertWritable(policy, input.path, { root: false });
-  return { hostPath: input.path, policy };
+  return { hostPath: input.path, policy, dev: info.dev, ino: info.ino };
+}
+
+/**
+ * Throw unless `file.hostPath` still names the very file that was checked,
+ * inside the fence: an ancestor swapped for a symlink since then would make
+ * the same path reach another file.
+ */
+async function assertUnchanged(file: WritableFile): Promise<void> {
+  const now = await lstat(file.hostPath);
+  if (
+    now.dev !== file.dev ||
+    now.ino !== file.ino ||
+    !(await landedInside(file.policy, file.hostPath))
+  )
+    throw OUTSIDE;
 }
 
 /**
@@ -92,17 +105,29 @@ function destinationOf(source: string, destination: unknown): string | undefined
   return segments === undefined ? undefined : join(dirname(source), ...segments);
 }
 
-/** Give `from` the new name `to` without ever replacing an existing `to`. */
-async function moveNoReplace(from: string, to: string): Promise<void> {
+/**
+ * Give `from` the new name `to` without ever replacing an existing `to`. All
+ * or nothing: when the new name lands outside the fence, the source is no
+ * longer the checked file, or the old name cannot be removed, the new name is
+ * removed again and the error is thrown.
+ */
+async function moveNoReplace(from: WritableFile, to: string): Promise<void> {
   try {
-    await link(from, to);
+    await link(from.hostPath, to);
   } catch (error) {
     const code = (error as { code?: string }).code;
     // Different filesystem, or one without hard links: exclusive copy instead.
     if (code !== 'EXDEV' && code !== 'EPERM' && code !== 'ENOTSUP') throw error;
-    await copyFile(from, to, constants.COPYFILE_EXCL);
+    await copyFile(from.hostPath, to, constants.COPYFILE_EXCL);
   }
-  await unlink(from);
+  try {
+    if (!(await landedInside(from.policy, to))) throw OUTSIDE;
+    await assertUnchanged(from);
+    await unlink(from.hostPath);
+  } catch (error) {
+    await unlink(to).catch(() => undefined);
+    throw error;
+  }
 }
 
 /**
@@ -125,8 +150,15 @@ export async function handleRenameFile(ctx: SaveContext, request: Request): Prom
       return fail(422, 'path has no verified Host path');
     await assertWritable(source.policy, destination, { root: false });
     signal.throwIfAborted();
-    await mkdir(dirname(destination), { recursive: true });
-    await moveNoReplace(source.hostPath, destination);
+    const parent = dirname(destination);
+    const first = await mkdir(parent, { recursive: true });
+    try {
+      await moveNoReplace(source, destination);
+    } catch (error) {
+      // Nothing left behind: the folders this rename created go again.
+      await undoMkdir(parent, first);
+      throw error;
+    }
     return json(200, { absolutePath: destination });
   } catch (error) {
     if (request.signal.aborted) return fail(499, 'cancelled');
@@ -147,6 +179,8 @@ export async function handleDeleteFile(ctx: SaveContext, request: Request): Prom
     const target = await writableFile(ctx, input, signal);
     if (target instanceof Response) return target;
     signal.throwIfAborted();
+    // A delete cannot be undone, so the file is re-identified right before it.
+    await assertUnchanged(target);
     await unlink(target.hostPath);
     return json(200, { absolutePath: target.hostPath });
   } catch (error) {

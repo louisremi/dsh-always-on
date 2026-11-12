@@ -22,9 +22,11 @@ function coordinate(value: string | null): number | undefined {
 }
 
 /**
- * The file's modification time as an HTTP date, read from the Host path the
- * request resolved to. Best effort: the Harness filesystem exposes no mtime,
- * so a backend whose files are not on the Host simply omits the header.
+ * The file's modification time as an HTTP date, read from the Host file the
+ * Harness filesystem resolved (through any symlink, like the bytes served),
+ * not by resolving the request path a second time. Best effort: the Harness
+ * filesystem exposes no mtime, so a backend whose files are not on the Host
+ * simply omits the header.
  */
 async function lastModified(hostPath: string): Promise<string | undefined> {
   try {
@@ -173,7 +175,12 @@ export async function handleDownload(ctx: DownloadContext, request: Request): Pr
       'content-disposition': contentDisposition(basename(target.displayPath ?? processPath)),
     };
     if (size !== undefined) headers['content-length'] = String(size);
-    const modified = await lastModified(located);
+    const resolved = target.targetKey;
+    const modified = await lastModified(
+      resolved !== undefined && fs.processPathFromHostPath(resolved) !== undefined
+        ? resolved
+        : located,
+    );
     if (modified !== undefined) headers['last-modified'] = modified;
     if (method === 'HEAD') return new Response(null, { headers });
 
