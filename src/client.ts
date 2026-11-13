@@ -8,6 +8,10 @@
  *    switches to the sidebar file explorer.
  *  - "Edit" opens a file in a sidebar editor tab (Monaco, loaded from a CDN
  *    inside a sandboxed iframe; plain textarea when the CDN is unreachable).
+ *  - "New file" / "New folder" in the Files tab toolbar; "Rename or move",
+ *    "Delete" (to a trash, with a 10-second Restore toast) and, for folders,
+ *    "Download as .zip" in the stock context menu of the Files tree
+ *    (DSH >= 0.2.2-rc.1; feature-detected, absent on older Harnesses).
  *
  * This file is a classic script, not a module: dsh serves `exports["./client"]`
  * verbatim to the browser, which registers it through `window.__ModuleLoader__`.
@@ -285,9 +289,9 @@ window.__ModuleLoader__.load({
 .dlf-dlg-actions{display:flex;justify-content:flex-end;gap:8px}
 .dlf-dlg .dlf-ed-btn[data-primary]{background:var(--dsw-alias-interactive-bg-hover)}
 .dlf-dlg .dlf-ed-btn[data-danger]{color:var(--dsw-alias-state-error-primary)}
-.dlf-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483001;box-sizing:border-box;max-width:min(560px,calc(100vw - 32px));display:flex;align-items:center;gap:12px;padding:8px 8px 8px 14px;border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-label-primary,#222);color:var(--dsw-alias-bg-base,#fff);font-family:var(--dsw-font-family);font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.3)}
+.dlf-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483001;box-sizing:border-box;width:max-content;max-width:min(560px,calc(100vw - 32px));display:flex;align-items:center;gap:12px;padding:8px 8px 8px 14px;border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-label-primary,#222);color:var(--dsw-alias-bg-base,#fff);font-family:var(--dsw-font-family);font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.3)}
 .dlf-toast[data-tone=error]{background:var(--dsw-alias-state-error-primary,#b42318)}
-.dlf-toast-text{min-width:0;overflow-wrap:anywhere}
+.dlf-toast-text{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
 .dlf-toast-btn{flex:none;padding:4px 10px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:inherit;font:inherit;font-weight:600;text-decoration:underline;cursor:pointer}
 .dlf-toast-btn:hover:not(:disabled),.dlf-toast-btn:focus-visible,.dlf-toast-close:hover,.dlf-toast-close:focus-visible{background:rgba(127,127,127,.25)}
 .dlf-toast-btn:disabled{opacity:.6;cursor:default}

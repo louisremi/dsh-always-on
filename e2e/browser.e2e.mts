@@ -2,7 +2,7 @@
  * Opt-in browser end-to-end suite: `npm run test:e2e`.
  *
  * Drives dist/client.js and the plugin's real Host routes (save, download, create,
- * rename, delete; over a fake Harness fs) in headless Chromium against the
+ * rename, delete, restore, folder summary and zip; over a fake Harness fs) in headless Chromium against the
  * REAL Monaco build on jsDelivr (needs internet), including a CDN-blocked
  * run, edit conflicts and the iframe sandbox isolation. Not part of
  * `npm test` / CI because it needs a browser and network.
@@ -29,7 +29,14 @@ const REACT_DOM_UMD =
 const { handleSave } = await import('../src/save-route.ts');
 const { handleDownload } = await import('../src/download-route.ts');
 const { handleCreateFile, handleCreateFolder } = await import('../src/create-route.ts');
-const { handleRenameFile, handleDeleteFile } = await import('../src/entry-route.ts');
+const {
+  handleRenameFile,
+  handleDeleteFile,
+  handleRenameFolder,
+  handleDeleteFolder,
+  handleRestore,
+} = await import('../src/entry-route.ts');
+const { handleFolderSummary, handleDownloadFolder } = await import('../src/folder-route.ts');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
 const versionOf = (p: string) => {
@@ -85,7 +92,7 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%} #root{width:600px;height:500px}</style></head><body><div id="root"></div>
 <script src="/react.js"></script><script src="/react-dom.js"></script><script src="/ft.js"></script>
 <script>window.__ws=${JSON.stringify(dir)};window.__regs=[];window.__opened=[];window.__closeHandlers={};window.__tabTypes=[];
-window.__ModuleLoader__={load:(m)=>{window.__mod=m;}};</script>
+window.__menus=[];window.__ModuleLoader__={load:(m)=>{window.__mod=m;}};</script>
 <script src="/client.js"></script>
 <script>
 const params=new URLSearchParams(location.search);
@@ -100,11 +107,18 @@ const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
    const r=await fetch('/fs/read?path='+encodeURIComponent(path)); if(r.status===404) return {ok:false,error:{code:'workspace-file/not-found'}};
    const j=await r.json(); const bin=atob(j.b64); const data=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)data[i]=bin.charCodeAt(i);
    return {ok:true,value:{data,eof:true,bytes:data.length,version:j.version,absolutePath:path}};}}},
- slots:{inject:(n,f)=>f(),register:(o,c)=>{window.__regs.push([o,c]);}}};
+ slots:{inject:(n,f)=>{const r=f();if(r&&typeof r.next==='function')for(const _ of r);},register:(o,c)=>{window.__regs.push([o,c]);}},
+ contextMenus:{register:(c)=>{window.__menus.push(c);return()=>{}}},
+ sessions:{list:{getSnapshot:()=>({byId:{sess:{cwd:window.__ws}}})}},
+ inject:(deps,cb)=>{if(params.get('menus')!=='none')cb(ctx);}};
 const exp=window.__mod.factory((s)=>{if(s==='react')return window.React;if(s==='@deepseek-ai/dsh-client-ui-primitives'){if(params.get('prim')==='none'||!window.__ft)throw new Error('missing');return window.__ft;}throw new Error(s)});
 exp.apply(ctx);
 const reg=(name,key,id)=>window.__regs.find(([o])=>o.name===name&&(key===undefined||o.key===key)&&(id===undefined||o.id===id))[1];
 const h=React.createElement;
+// The stock menu, reduced to what a plugin sees: resolve a target, run an action by id.
+window.__menu=async(target,path)=>{const c=window.__menus.find((m)=>m.target===target);return c?(await c.resolve({sessionId:'sess',path},new AbortController().signal)).map(({run,...a})=>a):[];};
+window.__run=async(target,path,id)=>{const c=window.__menus.find((m)=>m.target===target);const a=(await c.resolve({sessionId:'sess',path},new AbortController().signal)).find((x)=>x.id===id);try{await a.run();return 'ok';}catch(e){return 'failed:'+a.failureLabel;}};
+{const o=document.createElement('div');o.id='overlay';document.body.appendChild(o);const Overlay=window.__regs.find(([r])=>r.name==='shell.overlay');if(Overlay)ReactDOM.createRoot(o).render(h(Overlay[1],{}));}
 const info={tab:{id:'tab1',contentId:params.get('addr'),title:'x',signal:new AbortController().signal,actions:{bindCommands:()=>()=>{}}}};
 window.__mountTitles=(titles)=>{
   const Title=reg('sidebar.right.pane.tab.title','@louisremi/dsh-always-on/editor');
@@ -193,9 +207,36 @@ const server = http.createServer(async (req, res) => {
     res.end(Buffer.from(await out.arrayBuffer()));
     return;
   }
+  const folderReads: Record<string, typeof handleFolderSummary> = {
+    '/api/folder.summary': handleFolderSummary,
+    '/api/download.folder': (c, r) => handleDownloadFolder(c, r),
+  };
+  if (url.pathname in folderReads) {
+    const out = await folderReads[url.pathname](
+      {
+        fs: {
+          processPathFromHostPath: (p) => p,
+          resolve: async (p) => ({ displayPath: p }),
+          stat: hostCtx.fs.stat,
+          readByteRange: async () => new Uint8Array(),
+        },
+        sandboxPolicy: hostCtx.sandboxPolicy,
+        workspaceFiles: hostCtx.workspaceFiles,
+        sessionQuery: { readEvent: async () => Promise.reject(new Error('unused')) },
+        workspaceChanges: { summary: () => undefined },
+      },
+      new Request(`http://x${url.pathname}${url.search}`, { method: req.method }),
+    );
+    res.writeHead(out.status, Object.fromEntries(out.headers));
+    res.end(Buffer.from(await out.arrayBuffer()));
+    return;
+  }
   const mutations: Record<string, (ctx: SaveContext, r: Request) => Promise<Response>> = {
     '/api/rename.file': handleRenameFile,
     '/api/delete.file': handleDeleteFile,
+    '/api/rename.folder': handleRenameFolder,
+    '/api/delete.folder': handleDeleteFolder,
+    '/api/restore.entry': handleRestore,
   };
   if (url.pathname in mutations) {
     const body = await new Promise<Buffer>((r) => {
@@ -474,6 +515,12 @@ await check(
   },
 );
 
+/** Pick an action of our menu contribution, as the stock context menu does on a click. */
+const menuRun = (page: any, target: 'file' | 'directory', path: string, id: string) =>
+  page.evaluate(([t, p, i]: string[]) => (window as any).__run(t, p, i), [target, path, id]);
+const menuOf = (page: any, target: 'file' | 'directory', path: string) =>
+  page.evaluate(([t, p]: string[]) => (window as any).__menu(t, p), [target, path]);
+
 const fileAddr = (p: string) =>
   `dsh-resource://file/session/sess/${p.split('/').map(encodeURIComponent).join('/')}`;
 
@@ -487,7 +534,7 @@ await check(
     await page.evaluate((a: string) => {
       (window as any).__tabs = [{ id: 'p1', kind: 'text', contentId: a }];
     }, fileAddr(f));
-    await page.click('[data-rename-file] button');
+    await menuRun(page, 'file', f, 'rename');
     const value = await page.inputValue('[data-dlf-dialog] input');
     assert.equal(value, 'ren.txt');
     // Stem selected, extension not.
@@ -548,7 +595,7 @@ await check(
       },
       [fileAddr(f), f],
     );
-    await page.click('#actions [data-delete-file] button');
+    await menuRun(page, 'file', f, 'delete');
     await page.click('[data-dlf-dialog] button[type=submit]');
     await page.waitForFunction(() =>
       /entry\.dirty/.test(
@@ -562,15 +609,25 @@ await check(
     await page.evaluate((a: string) => {
       (window as any).__tabs = [{ id: 'p9', kind: 'text', contentId: a }];
     }, fileAddr(f));
-    await page.click('[data-delete-file] button');
+    await menuRun(page, 'file', f, 'delete');
     assert.match(
       await page.textContent('[data-dlf-dialog]'),
-      /delete\.question\{"name":"del\.txt"\}/,
+      /delete\.question\{"name":"del\.txt"\} delete\.trashNote/,
     );
     await page.click('[data-dlf-dialog] button[type=submit]');
     await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
     assert.throws(() => readFileSync(f));
     assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['p9']);
+    // The Restore toast brings it back and reopens its tab.
+    await page.waitForSelector('[data-dlf-toast=deleted]');
+    assert.match(await page.textContent('[data-dlf-toast]'), /delete\.doneFile.*restore\.file/);
+    await page.click('[data-dlf-restore]');
+    await page.waitForSelector('[data-dlf-toast=restored]');
+    assert.equal(readFileSync(f, 'utf8'), 'd');
+    assert.deepEqual((await page.evaluate(() => (window as any).__opened)).at(-1), [
+      fileAddr(f),
+      {},
+    ]);
   },
 );
 
@@ -591,7 +648,7 @@ await check(
       },
       [fileAddr('twin/same.txt'), fileAddr('same.txt')],
     );
-    await page.click('[data-delete-file] button');
+    await menuRun(page, 'file', f, 'delete');
     await page.click('[data-dlf-dialog] button[type=submit]');
     await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
     assert.throws(() => readFileSync(f));
@@ -599,6 +656,211 @@ await check(
     assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['mine']);
   },
 );
+
+await check(
+  'Menus: file and folder entries, root folder protected, toolbar has no Rename/Delete',
+  async (page) => {
+    const f = join(dir, 'menu.txt');
+    writeFileSync(f, 'm');
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(f)}`);
+    const ids = (items: any[]) => items.map((i) => `${i.id}${i.disabled ? '!' : ''}`);
+    assert.deepEqual(ids(await menuOf(page, 'file', f)), ['rename', 'delete']);
+    // A relative tree path resolves against the session's workspace.
+    assert.deepEqual(ids(await menuOf(page, 'file', 'menu.txt')), ['rename', 'delete']);
+    assert.deepEqual(ids(await menuOf(page, 'directory', join(dir, 'twin'))), [
+      'rename',
+      'delete',
+      'zip',
+    ]);
+    assert.deepEqual(ids(await menuOf(page, 'directory', dir)), ['rename!', 'delete!', 'zip']);
+    const del = (await menuOf(page, 'file', f)).find((i: any) => i.id === 'delete');
+    assert.equal(del.danger, true);
+    assert.deepEqual(del.icon, { key: 'always-on.delete' });
+    // The preview toolbar keeps Edit + Download only.
+    assert.equal(
+      await page.$$eval('[data-edit-file],[data-download-file]', (e: any[]) => e.length),
+      2,
+    );
+    assert.equal(await page.$('[data-rename-file],[data-delete-file]'), null);
+    // Without the stock context menu, the rest still loads.
+    await page.goto(`${base}/?what=actions&menus=none&abs=${encodeURIComponent(f)}`);
+    await page.waitForSelector('[data-download-file]');
+    assert.equal(await page.evaluate(() => (window as any).__menus.length), 0);
+  },
+);
+
+await check(
+  'Folder rename: moves the tree, refuses taken names and moves into itself, retargets tabs',
+  async (page) => {
+    const d = join(dir, 'fold');
+    mkdirSync(join(d, 'in'), { recursive: true });
+    writeFileSync(join(d, 'in', 'x.txt'), 'x');
+    mkdirSync(join(dir, 'fold-taken'));
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(join(d, 'in', 'x.txt'))}`);
+    await page.evaluate(
+      ([a, b]: string[]) => {
+        (window as any).__tabs = [
+          { id: 'abs', kind: 'text', contentId: a },
+          { id: 'rel', kind: 'text', contentId: b },
+          { id: 'sib', kind: 'text', contentId: 'dsh-resource://file/session/sess/fold-taken.txt' },
+        ];
+      },
+      [fileAddr(join(d, 'in', 'x.txt')), fileAddr('fold/in/x.txt')],
+    );
+    await menuRun(page, 'directory', d, 'rename');
+    assert.match(await page.textContent('[data-dlf-dialog] h2'), /rename\.folderTitle/);
+    assert.equal(await page.inputValue('[data-dlf-dialog] input'), 'fold');
+    for (const [name, error] of [
+      ['fold-taken', /create\.exists/],
+      ['fold/in/deeper', /rename\.intoItself/],
+    ] as const) {
+      await page.fill('[data-dlf-dialog] input', name);
+      await page.press('[data-dlf-dialog] input', 'Enter');
+      await page.waitForFunction(
+        (src: string) =>
+          new RegExp(src).test(
+            document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+          ),
+        error.source,
+      );
+    }
+    await page.fill('[data-dlf-dialog] input', 'moved/fold2');
+    await page.press('[data-dlf-dialog] input', 'Enter');
+    await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    assert.equal(readFileSync(join(dir, 'moved/fold2/in/x.txt'), 'utf8'), 'x');
+    assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['abs', 'rel']);
+    const opened = (await page.evaluate(() => (window as any).__opened)).slice(-2);
+    assert.deepEqual(opened, [
+      [fileAddr(join(dir, 'moved/fold2/in/x.txt')), {}],
+      [fileAddr(join(dir, 'moved/fold2/in/x.txt')), {}],
+    ]);
+  },
+);
+
+await check(
+  'Folder delete: counts the contents, refuses a dirty editor inside, trashes, restores',
+  async (page) => {
+    const d = join(dir, 'gone-dir');
+    mkdirSync(join(d, 'sub'), { recursive: true });
+    writeFileSync(join(d, 'a.txt'), 'aa');
+    writeFileSync(join(d, 'sub', 'b.txt'), 'bbb');
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(join(d, 'a.txt'))}`);
+    // A dirty editor tab on a file inside blocks the delete.
+    await page.evaluate((a: string) => {
+      (window as any).__tabs = [{ id: 'tab1', kind: 'dlf-editor', contentId: a }];
+    }, fileAddr('gone-dir/sub/b.txt'));
+    await page.route('https://cdn.jsdelivr.net/**', (route: any) => route.abort());
+    await page.evaluate(
+      (a: string) => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const w = window as any;
+        const Body = w.__regs.find(([o]: any) => o.name === 'sidebar.right.pane.tab')[1];
+        const tab = {
+          id: 'tab1',
+          contentId: a,
+          title: 'b.txt',
+          signal: new AbortController().signal,
+          actions: { bindCommands: () => () => {} },
+        };
+        w.ReactDOM.createRoot(host).render(
+          w.React.createElement(Body, { useTabInfo: () => ({ tab }), sessionId: 'sess' }),
+        );
+      },
+      fileAddr(join(d, 'sub', 'b.txt')),
+    );
+    await page.waitForSelector('textarea.dlf-ed-text', { timeout: 30000 });
+    await page.click('textarea.dlf-ed-text');
+    await page.keyboard.type('x');
+    await page.waitForFunction(() => document.querySelector('.dlf-ed-dot'));
+    await menuRun(page, 'directory', d, 'delete');
+    await page.waitForFunction(() =>
+      /delete\.folderContents\{"name":"gone-dir","files":2,"folders":1,"size":"5 B"\}/.test(
+        document.querySelector('[data-dlf-dialog]')?.textContent ?? '',
+      ),
+    );
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForFunction(() =>
+      /entry\.dirtyFolder/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+    assert.equal(readFileSync(join(d, 'a.txt'), 'utf8'), 'aa');
+    await page.keyboard.press('Escape');
+    // Clean: deleted into the trash, tabs closed, Restore brings it back.
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(join(d, 'a.txt'))}`);
+    await page.evaluate(
+      (a: string) => {
+        (window as any).__tabs = [{ id: 'in', kind: 'text', contentId: a }];
+      },
+      fileAddr(join(d, 'sub', 'b.txt')),
+    );
+    await menuRun(page, 'directory', d, 'delete');
+    await page.waitForFunction(() =>
+      /delete\.folderContents/.test(document.querySelector('[data-dlf-dialog]')?.textContent ?? ''),
+    );
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForSelector('[data-dlf-toast=deleted]');
+    assert.throws(() => statSync(d));
+    assert.deepEqual(await page.evaluate(() => (window as any).__closed), ['in']);
+    assert.match(await page.textContent('[data-dlf-toast]'), /delete\.doneFolder.*restore\.folder/);
+    await page.click('[data-dlf-restore]');
+    await page.waitForSelector('[data-dlf-toast=restored]');
+    assert.equal(readFileSync(join(d, 'sub', 'b.txt'), 'utf8'), 'bbb');
+  },
+);
+
+await check(
+  'Restore toast: only the last deletion, gone after 10 s, held while hovered',
+  async (page) => {
+    for (const n of ['t1.txt', 't2.txt', 't3.txt']) writeFileSync(join(dir, n), n);
+    mkdirSync(join(dir, 'empty-dir'), { recursive: true });
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(join(dir, 't1.txt'))}`);
+    const del = async (target: 'file' | 'directory', path: string) => {
+      await menuRun(page, target, path, 'delete');
+      await page.click('[data-dlf-dialog] button[type=submit]');
+      await page.waitForFunction(() => !document.querySelector('[data-dlf-dialog]'));
+    };
+    await del('file', join(dir, 't1.txt'));
+    await del('directory', join(dir, 'empty-dir'));
+    assert.equal(await page.$$eval('[data-dlf-toast]', (e: any[]) => e.length), 1);
+    assert.match(await page.textContent('[data-dlf-toast]'), /empty-dir/);
+    await page.click('[data-dlf-restore]');
+    await page.waitForSelector('[data-dlf-toast=restored]');
+    assert.ok(statSync(join(dir, 'empty-dir')).isDirectory());
+    assert.throws(() => statSync(join(dir, 't1.txt')), 'only the last deletion is restored');
+    // Hovered, it stays past 10 s; left alone, it goes.
+    await del('file', join(dir, 't2.txt'));
+    await page.hover('[data-dlf-toast]');
+    await page.waitForTimeout(10_500);
+    assert.ok(await page.$('[data-dlf-toast=deleted]'), 'held while hovered');
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(10_500);
+    assert.equal(await page.$('[data-dlf-toast]'), null);
+    // Restoring onto a name taken again is refused, the file stays in the trash.
+    await del('file', join(dir, 't3.txt'));
+    writeFileSync(join(dir, 't3.txt'), 'new');
+    await page.click('[data-dlf-restore]');
+    await page.waitForSelector('[data-dlf-toast=failed]');
+    assert.match(await page.textContent('[data-dlf-toast]'), /restore\.taken/);
+    assert.equal(readFileSync(join(dir, 't3.txt'), 'utf8'), 'new');
+  },
+);
+
+await check('Download as .zip: starts a download of the folder archive', async (page) => {
+  const d = join(dir, 'zipped');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'z.txt'), 'z');
+  await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(join(d, 'z.txt'))}`);
+  const [download, outcome] = await Promise.all([
+    page.waitForEvent('download'),
+    menuRun(page, 'directory', d, 'zip'),
+  ]);
+  assert.equal(outcome, 'ok');
+  assert.equal(download.suggestedFilename(), 'zipped.zip');
+  const gone = await menuRun(page, 'directory', join(dir, 'no-such-folder'), 'zip');
+  assert.match(gone, /^failed:menu\.downloadFailed/);
+});
 
 await check(
   'New file: Host errors get specific messages (gone folder, gone session)',

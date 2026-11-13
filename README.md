@@ -5,7 +5,7 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin for
 Run the Harness in a Docker container — on a NAS, a server, anywhere — and it lives on a machine of its own: the stock "show file location" and "Open in app" buttons would have to reach a desktop that isn't there, and nothing inside the container can read or write your computer's files. Your browser is the only connection between you and your files. This plugin makes it enough, replacing the dead buttons with things that work through it:
 - **Download file** buttons that save a file to your computer.
 - **Show files**, which opens the sidebar file explorer.
-- **New file** and **New folder**, in the Files tab, and **Rename/move** and **Delete** for the file you are previewing.
+- **New file** and **New folder** in the Files tab, and **Rename/move**, **Delete** (with a 10-second **Restore**) and **Download as .zip** in the Files tree's right-click menu, for files and folders.
 - **Edit**, which opens a text file in an in-sidebar code editor ([Monaco](https://microsoft.github.io/monaco-editor/), the editor behind VS Code) and saves it back to the Harness host.
 
 ## Install
@@ -30,11 +30,14 @@ Nothing to configure.
 
 **New folder.** The button next to New file creates a folder (`docs/drafts` creates both levels) in the folder the Files tab shows. Same rules: it never replaces anything and follows the sandbox mode. Since the Harness filesystem layer has no "make directory" operation, the plugin calls `mkdir` itself, after the same sandbox check. That is only possible when the Harness files live on the Harness host, which is also what downloads need.
 
-**Rename / move and Delete.** A file open in the sidebar preview gets two more buttons next to Download:
-- **Rename or move** asks for a new name, with the stem pre-selected. A plain name renames in place, `folder/name` moves it into a (possibly new) sub-folder, and an absolute path moves it there. It never replaces an existing file: if the name is taken, it says so. Tabs showing the old name are closed and the file reopens under its new name.
-- **Delete** asks for confirmation, deletes the file and closes its tabs. There is no undo.
-- Both are refused while an editor tab has unsaved changes to that file, and both follow the sandbox mode like New folder.
-- They only act on regular files. Symlinks are refused, not followed. Folders cannot be renamed or deleted from the UI yet.
+**Rename / move, Delete and Restore.** Right-click a file or folder in the sidebar's Files tree (or use its `…` menu) for **Rename or move…** and **Delete…**:
+- **Rename or move** asks for a new name, with the stem pre-selected. A plain name renames in place, `folder/name` moves it into a (possibly new) sub-folder, and an absolute path moves it there. It never replaces anything: if the name is taken (even by an empty folder), it says so. A folder can't be moved into itself. Open tabs follow the file, or the files of the folder, to the new place.
+- **Delete** asks for confirmation (for a folder, with what is inside: "12 files, 3 folders (48 KiB)") and moves the file or folder to the trash, `.tmp/deleted/` in the workspace. Its tabs are closed.
+- **Restore.** For 10 seconds after a delete, a **Restore deleted file/folder** button at the bottom of the page puts it back where it was and reopens its tabs. Hovering it pauses the countdown. Only the last deletion can be restored this way. Older ones stay in `.tmp/deleted/<date>-<id>/` for 30 days, then they are removed for good.
+- Both are refused while an editor tab has unsaved changes to the file, or to any file in the folder. Both follow the sandbox mode like New folder. The workspace folder itself can't be renamed or deleted.
+- They act on regular files and real folders. A symlink is never followed. A folder's symlinks are moved as links; what they point to is never touched.
+
+**Download as .zip.** The same menu on a folder (including the workspace folder, from the Files tab header) downloads it as one `.zip`, streamed as it is built. Symlinks and special files are left out and listed in a `DOWNLOAD-SKIPPED.txt` inside the archive. Up to 20,000 entries and 2 GiB.
 
 **Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
@@ -47,7 +50,16 @@ Nothing to configure.
 
 ## How it works
 
-The plugin adds authenticated routes to the Harness, `GET /api/download.file`, `POST /api/save.file`, `POST /api/create.file`, `POST /api/create.folder`, `POST /api/rename.file` and `POST /api/delete.file`, and registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check, after the plugin's own sandbox check.
+The plugin adds authenticated routes to the Harness:
+- reads: `GET /api/download.file`, `GET /api/download.folder` and `GET /api/folder.summary`;
+- writes: `POST /api/save.file`, `/api/create.file`, `/api/create.folder`, `/api/rename.file`, `/api/rename.folder`, `/api/delete.file`, `/api/delete.folder` and `/api/restore.entry`.
+
+It registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return), and its file and folder actions in the stock context menu (`ctx.contextMenus`, DSH ≥ 0.2.2-rc.1). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check, after the plugin's own sandbox check.
+
+The Harness filesystem layer has no folder operations, so the rest acts on the Host paths directly:
+- **Moving a folder** (rename, delete, restore) runs GNU coreutils `mv --no-copy --no-clobber -T`. Node can't rename a folder without risking replacing an empty one at the destination; `mv` can, through `renameat2(RENAME_NOREPLACE)` (see [#24](https://github.com/louisremi/dsh-always-on/issues/24) for the tradeoffs).
+- **The trash** is `.tmp/deleted/` in the workspace root, or in the extra writable directory the entry lives in. Each delete gets its own `<UTC date>-<id>` folder there. Restoring uses a token kept in the Harness's memory for 10 minutes, so the browser never names the path to restore. The plugin removes trash folders older than 30 days when it starts, after each delete, and once a day. It removes only folders with that exact name pattern, never follows symlinks, and never crosses into another mounted filesystem.
+- **Folder downloads** are streamed by a small ZIP writer (deflate from Node's `zlib`, no dependency).
 
 ### The editor and the CDN
 
@@ -62,10 +74,10 @@ To keep the package small (~116 kB), Monaco is **not bundled**. On the first Edi
 This plugin lets anyone who can use your Harness download and change files through the browser. It is built not to give them anything they could not already do there.
 - **Authenticated routes only.** Every route lives under `/api/` on the Harness's own connection layer (`ctx.connection.fetch`). Requests without a valid session cookie are rejected (401) before the plugin sees them, and only the Harness owner reaches the routes. Requests from foreign hosts or other sites are rejected too: cross-site `Sec-Fetch-Site` or a foreign `Origin` gets a 403. Nothing is served from a plain, unauthenticated web route.
 - **Writes follow the session's sandbox mode.** Saves go through the Harness filesystem layer with the sandbox policy of the session the file belongs to, and the plugin checks that policy itself first, so it also holds on a filesystem backend that does not enforce it. In `read-only` mode nothing is written. In `workspace-write` mode the target must be inside the session's writable roots (its workspace, any extra writable directories, the temp areas). Only `danger-full-access` allows writes anywhere, exactly as for the agent's own file tools. The plugin never widens a session's mode. For a session that is not running, it uses that session's saved workspace and the deployment's default mode.
-- **Creating, renaming and deleting are fenced by the plugin itself.** Before New file, New folder, Rename/move or Delete touches anything, the plugin checks the canonical path (symlinks resolved) against the session's policy, and a path it may not touch is refused whether or not it exists. Because a folder could be swapped for a symlink right after that check, new folders and renamed files are checked again where they landed and undone if they ended up outside, and a file is re-identified just before it is deleted. This holds even on a Harness filesystem backend that does not enforce the policy. In `workspace-write` mode the check is stricter than for the agent: only the workspace and its extra writable directories count, never temp areas, and the workspace root itself can't be renamed or deleted. These actions never replace an existing entry, and a rename is all or nothing: if it fails, the file keeps its old name and no new folders are left behind. Rename and Delete act only on regular files: symlinks are refused rather than followed, and folders are never deleted.
+- **Creating, renaming and deleting are fenced by the plugin itself.** Before New file, New folder, Rename/move or Delete touches anything, the plugin checks the canonical path (symlinks resolved) against the session's policy, and a path it may not touch is refused whether or not it exists. Because a folder could be swapped for a symlink right after that check, new folders and renamed files are checked again where they landed and undone if they ended up outside, and a file is re-identified just before it is deleted. This holds even on a Harness filesystem backend that does not enforce the policy. In `workspace-write` mode the check is stricter than for the agent: only the workspace and its extra writable directories count, never temp areas, and the workspace root itself can't be renamed or deleted. These actions never replace an existing entry, and a rename is all or nothing: if it fails, the entry keeps its old name and no new folders are left behind. Rename and Delete act only on regular files and real folders: symlinks are refused rather than followed. A delete is a move into the trash inside the same root, so it stays within what the session may write, and the trash itself can't be deleted through the plugin. A restore is checked against the session's sandbox mode again, and refused if its old name is taken. The trash is purged without following symlinks or crossing into a mounted filesystem.
 - **Writes are atomic and checked.** A save writes a temporary file and renames it over the target, so a crash or a full disk never leaves a half-written file. It is refused if the file changed on disk since the editor read it, unless you choose **Overwrite**.
 - **No silent corruption.** Binary files and invalid UTF-8 are refused, not decoded with replacement characters. Line endings and a byte-order mark are preserved.
-- **Downloads** are limited to regular files the Harness filesystem can reach. They are sent as `application/octet-stream` attachments with `X-Content-Type-Options: nosniff`, so the browser never renders them inline.
+- **Downloads** are limited to regular files and folders the Harness filesystem can reach; a folder archive never follows a symlink. They are sent as `application/octet-stream` attachments with `X-Content-Type-Options: nosniff`, so the browser never renders them inline.
 - **The CDN editor is isolated.** See [The editor and the CDN](#the-editor-and-the-cdn).
 
 **What it does not protect against:** anyone you let into your Harness can already run shell commands and agent tools, which are far more powerful than these buttons. Keep the Harness behind a trusted boundary: localhost, a VPN or tailnet, or an authenticated reverse proxy. Mount only the directories you want it to touch, and rely on version control or backups for recovery.
@@ -74,19 +86,13 @@ Found a security problem? Please [open an issue](https://github.com/louisremi/ds
 
 ## Limitations
 
-- Download: single files only; folders are not downloadable.
-- Rename and delete: single files only; folders cannot be renamed or deleted from the UI.
+- Needs DSH ≥ `0.2.2-rc.1` for Rename, Delete and Download as .zip (they live in its context menu); tested with `0.2.2-rc.2`. It depends on the stock `open-in-app`, `sidebar-right` and `context-menu` plugins' slot names and public API.
+- Renaming, deleting and restoring **folders** need GNU coreutils `mv` ≥ 9.0 on the Harness host (as in the Docker images). Elsewhere (Alpine/BusyBox, macOS, Windows) they are refused with a message; files still work. See [#24](https://github.com/louisremi/dsh-always-on/issues/24).
+- A folder on another filesystem than its trash (a mounted volume inside the workspace) can't be deleted: it would have to be copied, which could leave half a tree.
+- The trash is a plain `.tmp/deleted/` folder in your workspace. Version control and the agent can see it; add `.tmp/` to your `.gitignore` if needed. It is purged by the running Harness, so a workspace not used for a while is purged the next time something is deleted there.
+- Only the last deletion has a Restore button, for 10 seconds (the Harness keeps it restorable for 10 minutes). Older deletions can be restored by hand from `.tmp/deleted/` until they are 30 days old.
+- Download as .zip: up to 20,000 entries and 2 GiB, no ZIP64.
 - Edit: text files up to 1 MiB; no multi-user locking beyond the on-disk version check.
-- Tested with DSH `0.2.2-alpha.2`. It depends on the stock `open-in-app` and `sidebar-right` plugins' slot names and public API.
-
-## TODO
-
-Folder operations are not possible yet: only files can be renamed, moved, deleted and downloaded. Creating a folder works. Tracked in [#22](https://github.com/louisremi/dsh-always-on/issues/22), which explains what holds them back and how they could be built.
-- [ ] **Rename or move a folder.** Node has no rename that refuses to replace an existing entry (it silently replaces an empty destination folder), and folders can't be hard-linked like files.
-- [ ] **Delete a folder.** An empty folder is easy. A whole tree needs a size-aware confirmation, protection against emptying a mounted volume, and checks for unsaved edits in any file inside. There is no undo.
-- [ ] **Download a folder** as a `.zip` or `.tar` archive.
-
-All three also need a place in the UI: the Files tree of DSH `0.2.2-alpha.2` has no per-folder button or menu. DSH `0.2.2-rc.1` adds a right-click menu on tree rows that plugins can extend, so this work follows a move to that version.
 
 ## Development
 
