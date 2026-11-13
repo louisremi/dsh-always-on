@@ -105,7 +105,8 @@ interface ExecFailure {
  *    rename that replaces an empty folder);
  *  - `--no-copy` never falls back to copy + delete across filesystems;
  *  - `-T` never moves INTO an existing folder named `to`.
- * `-n` exits 0 when it refuses, so callers check the outcome on disk.
+ * `-n` exits 0 when it refuses (coreutils ≥ 9.5; 9.2–9.4 exit 1 with "not
+ * replacing"), so callers check the outcome on disk.
  */
 function runMove(from: string, to: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -124,6 +125,8 @@ function runMove(from: string, to: string): Promise<string> {
           reject(codedError(`"${moveCommand}" is not available on this Host`, 'ENOSYS'));
         else if (/unrecognized option|invalid option|unknown option/i.test(message))
           reject(codedError(`"${moveCommand}" lacks --no-copy/--no-clobber: ${message}`, 'ENOSYS'));
+        // coreutils 9.2–9.4 exit 1 when -n skips (9.5+ exit 0, see moveDirNoReplace).
+        else if (/not replacing|file exists/i.test(message)) reject(codedError(message, 'EEXIST'));
         else if (/cross-device/i.test(message)) reject(codedError(message, 'EXDEV'));
         else if (/subdirectory of itself/i.test(message)) reject(codedError(message, 'EINVAL'));
         else if (/no such file/i.test(message)) reject(codedError(message, 'ENOENT'));
