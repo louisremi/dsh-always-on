@@ -54,7 +54,16 @@ The plugin adds authenticated routes to the Harness:
 - reads: `GET /api/download.file`, `GET /api/download.folder` and `GET /api/folder.summary`;
 - writes: `POST /api/save.file`, `/api/create.file`, `/api/create.folder`, `/api/rename.file`, `/api/rename.folder`, `/api/delete.file`, `/api/delete.folder` and `/api/restore.entry`.
 
-It registers its buttons in the same UI slots as the stock ones, shadowing them (disable the plugin and the stock buttons return), and its file and folder actions in the stock context menu (`ctx.contextMenus`, DSH ≥ 0.2.2-rc.1). "Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check, after the plugin's own sandbox check.
+It adds its buttons to the same UI slots as the stock ones, and its file and folder actions to the stock context menu (`ctx.contextMenus`, DSH ≥ 0.2.2-rc.1).
+
+**No desktop.** Its bundle patch tells the Harness it has no desktop to open things on: `nativeOpen: false` on the `session-controller` row, and the Host `open-in-app` row disabled. A Harness in a container may well have an X display (e.g. a virtual one for a headless browser), but whatever it opened there would never reach your screen. So:
+- the stock "Show file location" and "Open in app" buttons disappear;
+- the "Open in ▸" submenu of sessions disappears;
+- "Show in folder" and "Open in default application" in file and folder menus stay, greyed out.
+
+"Open in sidebar", "Open in floating panel", the copy-path entries and Download keep working. The stock "This Host has no desktop…" note above presented files is hidden, since that is the expected state here. Disabling the plugin restores all of it.
+
+"Show files" calls the sidebar's public `openTab('files')`; the editor is a sidebar tab type registered through the public sidebar API. Downloads stream straight to disk, so large files are fine. Saves go through the Harness's own filesystem layer with the session's sandbox policy and a version check, after the plugin's own sandbox check.
 
 The Harness filesystem layer has no folder operations, so the rest acts on the Host paths directly:
 - **Moving a folder** (rename, delete, restore) runs GNU coreutils `mv --no-copy --no-clobber -T`. Node can't rename a folder without risking replacing an empty one at the destination; `mv` can, through `renameat2(RENAME_NOREPLACE)` (see [#24](https://github.com/louisremi/dsh-always-on/issues/24) for the tradeoffs).
@@ -86,7 +95,9 @@ Found a security problem? Please [open an issue](https://github.com/louisremi/ds
 
 ## Limitations
 
-- Needs DSH ≥ `0.2.2-rc.1` for Rename, Delete and Download as .zip (they live in its context menu); tested with `0.2.2-rc.2`. It depends on the stock `open-in-app`, `sidebar-right` and `context-menu` plugins' slot names and public API.
+- Needs DSH ≥ `0.2.2-rc.1` for Rename, Delete and Download as .zip (they live in its context menu); tested with `0.2.2-rc.2`. It depends on the stock `sidebar-right`, `deliverables`, `sidebar-documentpreview` and `context-menu` plugins' slot names and public API, and on the `session-controller` and `open-in-app` row ids it patches.
+- Not meant for a Harness running on your own desktop: it switches native opening off for the whole profile.
+- The stock client still asks for the removed `open-in-app` app list on page load, so the browser console shows one harmless 404.
 - Renaming, deleting and restoring **folders** need GNU coreutils `mv` ≥ 9.0 on the Harness host (as in the Docker images). Elsewhere (Alpine/BusyBox, macOS, Windows) they are refused with a message; files still work. See [#24](https://github.com/louisremi/dsh-always-on/issues/24).
 - A folder on another filesystem than its trash (a mounted volume inside the workspace) can't be deleted: it would have to be copied, which could leave half a tree.
 - The trash is a plain `.tmp/deleted/` folder in your workspace. Version control and the agent can see it; add `.tmp/` to your `.gitignore` if needed. It is purged by the running Harness, so a workspace not used for a while is purged the next time something is deleted there.

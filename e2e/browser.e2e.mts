@@ -302,7 +302,12 @@ const check = async (name: string, fn: (page: any, logs: string[]) => Promise<vo
     await fn(page, logs);
     results.push(['PASS', name]);
   } catch (e) {
-    results.push(['FAIL', name, (e as Error).message.split('\n')[0], logs.slice(0, 6)]);
+    results.push([
+      'FAIL',
+      name,
+      (e as Error).message.split('\n').slice(0, 8).join(' / '),
+      logs.slice(0, 6),
+    ]);
   }
   await context.close();
 };
@@ -690,6 +695,30 @@ await check(
 );
 
 await check(
+  'Stock "no desktop" note above presented files is hidden; own slot ids, no stock shadowing',
+  async (page) => {
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(join(dir, 'menu.txt'))}`);
+    const shown = await page.evaluate(() => {
+      const box = document.createElement('div');
+      box.innerHTML =
+        '<span id="note">This Host has no desktop…</span><div data-presented-files-row></div><span id="other">x</span>';
+      document.body.appendChild(box);
+      const visible = (id: string) =>
+        getComputedStyle(document.getElementById(id)!).display !== 'none';
+      return [visible('note'), visible('other')];
+    });
+    assert.deepEqual(shown, [false, true]);
+    const ids = await page.evaluate(() =>
+      (window as any).__regs.map(([o]: any) => `${o.name}:${o.id ?? o.key}:${o.priority ?? ''}`),
+    );
+    assert.ok(!ids.some((i: string) => /:open-in-app:/.test(i)), ids.join(' '));
+    assert.ok(
+      ids.includes('conversation.session.header.utilities:@louisremi/dsh-always-on/show-files:'),
+    );
+  },
+);
+
+await check(
   'Folder rename: moves the tree, refuses taken names and moves into itself, retargets tabs',
   async (page) => {
     const d = join(dir, 'fold');
@@ -913,7 +942,12 @@ await check(
     );
     assert.deepEqual(buttons, ['editor.reload', 'editor.overwrite', 'editor.keep']);
     await page.click('.dlf-ed-banner button:nth-of-type(2)');
-    await page.waitForFunction(() => !document.querySelector('.dlf-ed-banner'));
+    // The banner goes as soon as the save STARTS; the file is written when it says Saved.
+    await page.waitForFunction(
+      () =>
+        !document.querySelector('.dlf-ed-banner') &&
+        /editor\.saved/.test(document.querySelector('.dlf-ed-status')?.textContent ?? ''),
+    );
     assert.equal(readFileSync(f, 'utf8'), 'base!');
   },
 );

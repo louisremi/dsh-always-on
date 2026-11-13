@@ -18,9 +18,9 @@
  * It must keep no top-level `import`/`export`; TypeScript only adds types here
  * (see tsconfig: `erasableSyntaxOnly`).
  *
- * Slots keep one cell per `id` and the lowest `priority` wins, so registering
- * the stock id `open-in-app` at priority -1 shadows the stock control without
- * modifying it; disabling this plugin brings the stock buttons back.
+ * The stock "Open in app" / "Show file location" controls are not shadowed
+ * here: the bundle patch (cordis.patch.yml) tells the Harness it has no
+ * desktop, and the stock controls then render nothing by themselves.
  */
 
 /** The loader dsh's page runtime installs before loading plugin clients. */
@@ -66,7 +66,8 @@ window.__ModuleLoader__.load({
     const RESTORE_ROUTE = 'api/restore.entry';
     const SUMMARY_ROUTE = 'api/folder.summary';
     const DOWNLOAD_FOLDER_ROUTE = 'api/download.folder';
-    const STOCK_ID = 'open-in-app';
+    /** Slot-entry id prefix of every control this plugin registers. */
+    const OWN_ID = '@louisremi/dsh-always-on';
     const ERROR_MS = 4000;
 
     const EDITOR_ID = '@louisremi/dsh-always-on/editor';
@@ -248,6 +249,8 @@ window.__ModuleLoader__.load({
       'entry.crossDevice': '无法操作：它与目标位置位于不同的文件系统（挂载点）。',
     };
 
+    // The last rule hides the stock "This Host has no desktop…" note above presented
+    // files: in a container that is the normal case, and Download replaces opening.
     const CSS = `
 .dlf-split{box-sizing:border-box;display:inline-flex;align-items:stretch;flex:none;align-self:center;height:24px;overflow:hidden;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm);font-family:var(--dsw-font-family)}
 .dlf-main{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:3px 5px;border:0;background:transparent;color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px;white-space:nowrap;cursor:pointer}
@@ -289,6 +292,7 @@ window.__ModuleLoader__.load({
 .dlf-dlg-actions{display:flex;justify-content:flex-end;gap:8px}
 .dlf-dlg .dlf-ed-btn[data-primary]{background:var(--dsw-alias-interactive-bg-hover)}
 .dlf-dlg .dlf-ed-btn[data-danger]{color:var(--dsw-alias-state-error-primary)}
+span:has(+[data-presented-files-row]){display:none}
 .dlf-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483001;box-sizing:border-box;width:max-content;max-width:min(560px,calc(100vw - 32px));display:flex;align-items:center;gap:12px;padding:8px 8px 8px 14px;border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-label-primary,#222);color:var(--dsw-alias-bg-base,#fff);font-family:var(--dsw-font-family);font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.3)}
 .dlf-toast[data-tone=error]{background:var(--dsw-alias-state-error-primary,#b42318)}
 .dlf-toast-text{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
@@ -2249,8 +2253,6 @@ window.__ModuleLoader__.load({
 
         // ── download + show files ──
         const SessionShowFiles = () => h(ShowFiles, { sidebarRight: ctx.sidebarRight, t });
-        // Inside the Files tab a "Show files" button would be a no-op: render nothing.
-        const HiddenInFilesTab = () => null;
         const FilesTabNewFile = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
           h(CreateButton, { ...props, kind: 'file', sidebarRight: ctx.sidebarRight, t });
         const FilesTabNewFolder = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
@@ -2287,38 +2289,18 @@ window.__ModuleLoader__.load({
         };
         for (const [name, component] of Object.entries(slots)) {
           ctx.slots.inject(name, () =>
-            ctx.slots.register(
-              {
-                name,
-                id: STOCK_ID,
-                priority: -1,
-                locale: NS,
-              },
-              component,
-            ),
+            ctx.slots.register({ name, id: `${OWN_ID}/download`, locale: NS }, component),
           );
         }
         ctx.slots.inject('conversation.session.header.utilities', () =>
           ctx.slots.register(
             {
               name: 'conversation.session.header.utilities',
-              id: STOCK_ID,
+              id: `${OWN_ID}/show-files`,
               order: -10,
-              priority: -1,
               locale: NS,
             },
             SessionShowFiles,
-          ),
-        );
-        ctx.slots.inject('sidebar.right.tab.files.actions', () =>
-          ctx.slots.register(
-            {
-              name: 'sidebar.right.tab.files.actions',
-              id: STOCK_ID,
-              priority: -1,
-              locale: NS,
-            },
-            HiddenInFilesTab,
           ),
         );
         ctx.slots.inject('sidebar.right.tab.files.actions', () =>
