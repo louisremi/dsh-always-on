@@ -46,8 +46,9 @@ async function folderOf(ctx: DownloadContext, request: Request): Promise<string 
 }
 
 /**
- * Handle GET /api/folder.summary?path=: `{ files, folders, bytes, truncated }`
- * for everything under a folder (symlinks not followed nor counted). Stops
+ * Handle GET /api/folder.summary?path=: `{ files, folders, bytes, truncated,
+ * mounts, downloadable }` for everything under a folder (symlinks not followed
+ * nor counted; `mounts` lists the volumes mounted inside it). Stops
  * counting after {@link SUMMARY_LIMITS} or 2 s, with `truncated: true`.
  */
 export async function handleFolderSummary(
@@ -67,6 +68,7 @@ export async function handleFolderSummary(
       folders: walk.folders,
       bytes: walk.bytes,
       truncated: walk.truncated,
+      mounts: walk.mounts,
       downloadable:
         !walk.truncated &&
         walk.entries.length <= FOLDER_LIMITS.maxEntries &&

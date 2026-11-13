@@ -33,6 +33,8 @@ export interface Walk {
   skipped: string[];
   /** Whether a limit stopped the walk before the end. */
   truncated: boolean;
+  /** Folders on another filesystem than their parent (mount points), relative paths. */
+  mounts: string[];
 }
 
 /**
@@ -40,10 +42,18 @@ export interface Walk {
  * @param root - absolute Host path of a real folder.
  */
 export async function walkFolder(root: string, limits: WalkLimits): Promise<Walk> {
-  const walk: Walk = { entries: [], files: 0, folders: 0, bytes: 0, skipped: [], truncated: false };
-  const stack: string[] = [''];
+  const walk: Walk = {
+    entries: [],
+    files: 0,
+    folders: 0,
+    bytes: 0,
+    skipped: [],
+    truncated: false,
+    mounts: [],
+  };
+  const stack: { rel: string; dev: number | undefined }[] = [{ rel: '', dev: undefined }];
   while (stack.length > 0) {
-    const rel = stack.pop() as string;
+    const { rel, dev } = stack.pop() as { rel: string; dev: number | undefined };
     let names: string[];
     try {
       names = (await readdir(join(root, rel))).sort();
@@ -51,7 +61,15 @@ export async function walkFolder(root: string, limits: WalkLimits): Promise<Walk
       walk.skipped.push(rel);
       continue;
     }
-    const folders: string[] = [];
+    let parentDev = dev;
+    if (parentDev === undefined) {
+      try {
+        parentDev = Number((await lstat(root)).dev);
+      } catch {
+        parentDev = undefined;
+      }
+    }
+    const folders: { rel: string; dev: number }[] = [];
     for (const name of names) {
       if (limits.signal?.aborted) {
         walk.truncated = true;
@@ -88,11 +106,13 @@ export async function walkFolder(root: string, limits: WalkLimits): Promise<Walk
         walk.bytes += size;
       } else {
         walk.folders++;
-        folders.push(path);
+        const folderDev = Number(info.dev);
+        if (parentDev !== undefined && folderDev !== parentDev) walk.mounts.push(path);
+        folders.push({ rel: path, dev: folderDev });
       }
     }
     // Reversed so the stack pops them in name order.
-    for (const path of folders.reverse()) stack.push(path);
+    for (const folder of folders.reverse()) stack.push(folder);
   }
   return walk;
 }

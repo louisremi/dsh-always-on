@@ -150,6 +150,8 @@ window.__ModuleLoader__.load({
       'delete.counting': 'Counting what is inside…',
       'delete.trashNote':
         'It moves to a .tmp/deleted/ folder on the same disk, where it is kept for 30 days.',
+      'delete.mounts':
+        'Careful: it holds a mounted volume ({mounts}); everything on that volume goes to the trash too.',
       'delete.confirm': 'Delete',
       'delete.trash': 'This is the trash (or holds it); it empties itself after 30 days.',
       'delete.doneFile': 'Deleted {name}',
@@ -229,6 +231,7 @@ window.__ModuleLoader__.load({
       'delete.folderMany': '要删除 {name} 及其中超过 {files} 个文件和 {folders} 个文件夹吗？',
       'delete.counting': '正在统计内容…',
       'delete.trashNote': '它会移到同一磁盘上的 .tmp/deleted/ 文件夹，保留 30 天。',
+      'delete.mounts': '注意：其中包含一个挂载的卷（{mounts}），该卷上的全部内容也会移到回收站。',
       'delete.confirm': '删除',
       'delete.trash': '这是回收站（或包含回收站），30 天后会自动清空。',
       'delete.doneFile': '已删除 {name}',
@@ -1044,6 +1047,7 @@ span:has(+[data-presented-files-row]){display:none}
           folders: number;
           bytes: number;
           truncated: boolean;
+          mounts?: string[];
           downloadable: boolean;
         };
       } catch {
@@ -1146,7 +1150,13 @@ span:has(+[data-presented-files-row]){display:none}
       return h(NameDialog, {
         title: t(spec.deleteTitle),
         where: absolutePath,
-        hint: `${question} ${t('delete.trashNote')}`,
+        hint: [
+          question,
+          t('delete.trashNote'),
+          summary?.mounts?.length ? t('delete.mounts', { mounts: summary.mounts.join(', ') }) : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
         confirm: t('delete.confirm'),
         danger: true,
         t,

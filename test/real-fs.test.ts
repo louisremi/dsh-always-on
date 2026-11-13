@@ -13,6 +13,7 @@ import {
   chmodSync,
   constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -47,6 +48,7 @@ import { handleDownloadFolder, handleFolderSummary } from '../src/folder-route.t
 import { undoMkdir } from '../src/paths.ts';
 import { handleSave } from '../src/save-route.ts';
 import { purgeTrash, slotName, slotTime, trashRelation, trashRootFor } from '../src/trash.ts';
+import { walkFolder } from '../src/walk.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
 // sandbox, `outside` a sibling it must not reach. NOT under the OS temp dir:
@@ -923,11 +925,42 @@ test('folder.summary counts files, folders and bytes without following symlinks'
     folders: 2,
     bytes: 2,
     truncated: false,
+    mounts: [],
     downloadable: true,
   });
   assert.equal((await getFolder(handleFolderSummary, join(dir, 'a.txt'))).status, 403);
   assert.equal((await getFolder(handleFolderSummary, join(workspace, 'nope'))).status, 404);
   assert.equal((await getFolder(handleFolderSummary, 'rel')).status, 400);
+});
+
+/** A folder with a volume mounted right inside it: `/dev` and its `pts`, on most Linux boxes. */
+const holder = ((): { root: string; mounts: string[] } | undefined => {
+  for (const root of ['/dev', '/run']) {
+    try {
+      const dev = statSync(root).dev;
+      const mounts = readdirSync(root)
+        .filter((n) => {
+          const info = lstatSync(join(root, n));
+          return info.isDirectory() && info.dev !== dev;
+        })
+        .sort();
+      if (mounts.length > 0) return { root, mounts };
+    } catch {
+      /* not there, or not readable */
+    }
+  }
+  return undefined;
+})();
+
+test('a folder walk names the volumes mounted inside it', {
+  skip: holder === undefined && 'no folder with a mount inside it',
+}, async () => {
+  const { root, mounts } = holder as { root: string; mounts: string[] };
+  const walk = await walkFolder(root, { maxEntries: 2000, maxBytes: Number.MAX_SAFE_INTEGER });
+  for (const mount of mounts) assert.ok(walk.mounts.includes(mount), `${mount} is a mount`);
+  // Folders on the same filesystem as their parent are not mounts.
+  const plain = await walkFolder(workspace, { maxEntries: 2000, maxBytes: 1e12 });
+  assert.deepEqual(plain.mounts, []);
 });
 
 test('download.folder streams a valid zip: names, bytes, empty folders, no symlinks', async () => {

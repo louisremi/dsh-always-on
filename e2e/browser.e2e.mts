@@ -839,6 +839,34 @@ await check(
   },
 );
 
+await check('Delete: a folder holding a mounted volume names it in the dialog', async (page) => {
+  const d = join(dir, 'holds-mount');
+  mkdirSync(join(d, 'vol'), { recursive: true });
+  await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(d)}`);
+  await page.route('**/api/folder.summary*', (route: any) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        files: 0,
+        folders: 1,
+        bytes: 0,
+        truncated: false,
+        mounts: ['vol'],
+        downloadable: true,
+      }),
+    }),
+  );
+  await menuRun(page, 'directory', d, 'delete');
+  await page.waitForFunction(() =>
+    /delete\.mounts\{"mounts":"vol"\}/.test(
+      document.querySelector('[data-dlf-dialog]')?.textContent ?? '',
+    ),
+  );
+  await page.keyboard.press('Escape');
+  assert.ok(statSync(join(d, 'vol')).isDirectory());
+});
+
 await check('Delete: a mount point says so instead of blaming the Host path', async (page) => {
   const d = join(dir, 'mounted');
   mkdirSync(d, { recursive: true });
