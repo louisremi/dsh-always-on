@@ -85,6 +85,13 @@ function realHost(mode: Mode = 'workspace-write', options: HostOptions = {}) {
     maxFileBytes: 32 << 20,
     maxLines: 5000,
     maxEntries: 2000,
+    search: {
+      maxResults: 512,
+      maxEntries: 100000,
+      graceMs: 3000,
+      timeoutMs: 30000,
+      stderrMaxBytes: 65536,
+    },
   });
   // The real classes are structurally wider than the plugin's own interfaces
   // (branded ids, extra members); the casts only bridge those spellings.
