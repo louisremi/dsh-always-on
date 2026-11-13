@@ -57,6 +57,11 @@ window.__ModuleLoader__.load({
     const CREATE_FOLDER_ROUTE = 'api/create.folder';
     const RENAME_FILE_ROUTE = 'api/rename.file';
     const DELETE_FILE_ROUTE = 'api/delete.file';
+    const RENAME_FOLDER_ROUTE = 'api/rename.folder';
+    const DELETE_FOLDER_ROUTE = 'api/delete.folder';
+    const RESTORE_ROUTE = 'api/restore.entry';
+    const SUMMARY_ROUTE = 'api/folder.summary';
+    const DOWNLOAD_FOLDER_ROUTE = 'api/download.folder';
     const STOCK_ID = 'open-in-app';
     const ERROR_MS = 4000;
 
@@ -127,10 +132,41 @@ window.__ModuleLoader__.load({
       'create.noFolder': 'That folder no longer exists.',
       'mutation.noSession': 'This session no longer exists.',
       'mutation.unmapped': 'Not possible here: this file is not on the Harness host.',
+      'rename.folderTitle': 'Rename or move folder',
+      'rename.missingFolder': 'That folder no longer exists.',
+      'rename.intoItself': 'A folder cannot be moved into itself.',
       'delete.title': 'Delete file',
-      'delete.question': 'Delete {name}? This cannot be undone.',
+      'delete.folderTitle': 'Delete folder',
+      'delete.question': 'Delete {name}?',
+      'delete.folderQuestion': 'Delete the folder {name} and everything in it?',
+      'delete.emptyFolderQuestion': 'Delete the empty folder {name}?',
+      'delete.folderContents': 'Delete {name} and its {files} files, {folders} folders ({size})?',
+      'delete.folderMany': 'Delete {name} and its more than {files} files and {folders} folders?',
+      'delete.counting': 'Counting what is inside…',
+      'delete.trashNote':
+        'It goes to .tmp/deleted/ in the workspace, where it is kept for 30 days.',
       'delete.confirm': 'Delete',
+      'delete.trash': 'This is the trash (or holds it); it empties itself after 30 days.',
+      'delete.doneFile': 'Deleted {name}',
+      'delete.doneFolder': 'Deleted folder {name}',
+      'restore.file': 'Restore deleted file',
+      'restore.folder': 'Restore deleted folder',
+      'restore.done': 'Restored {name}',
+      'restore.taken':
+        'Cannot restore {name}: something with that name exists again. It is still in .tmp/deleted/.',
+      'restore.gone': 'Cannot restore {name}: it is no longer in the trash.',
+      'toast.dismiss': 'Dismiss',
+      'menu.rename': 'Rename or move…',
+      'menu.delete': 'Delete…',
+      'menu.downloadZip': 'Download as .zip',
+      'menu.downloadFailed': 'Could not download the folder (limit {files} files, {size}).',
+      'menu.failed': 'That did not work. Try again.',
       'entry.dirty': 'This file has unsaved edits in the editor. Save or discard them first.',
+      'entry.dirtyFolder':
+        'A file in this folder has unsaved edits in the editor. Save or discard them first.',
+      'entry.noMv': 'Moving folders needs GNU coreutils mv on the Harness host.',
+      'entry.crossDevice':
+        'Not possible: this is on another filesystem (a mount) than where it would go.',
     };
     const zh = {
       'download.title': '下载文件',
@@ -174,10 +210,38 @@ window.__ModuleLoader__.load({
       'create.noFolder': '该文件夹已不存在。',
       'mutation.noSession': '此会话已不存在。',
       'mutation.unmapped': '此处无法操作：该文件不在 Harness 主机上。',
+      'rename.folderTitle': '重命名或移动文件夹',
+      'rename.missingFolder': '该文件夹已不存在。',
+      'rename.intoItself': '不能把文件夹移动到它自身之中。',
       'delete.title': '删除文件',
-      'delete.question': '要删除 {name} 吗？此操作无法撤销。',
+      'delete.folderTitle': '删除文件夹',
+      'delete.question': '要删除 {name} 吗？',
+      'delete.folderQuestion': '要删除文件夹 {name} 及其全部内容吗？',
+      'delete.emptyFolderQuestion': '要删除空文件夹 {name} 吗？',
+      'delete.folderContents':
+        '要删除 {name} 及其中的 {files} 个文件、{folders} 个文件夹（{size}）吗？',
+      'delete.folderMany': '要删除 {name} 及其中超过 {files} 个文件和 {folders} 个文件夹吗？',
+      'delete.counting': '正在统计内容…',
+      'delete.trashNote': '它会移到工作区的 .tmp/deleted/ 中，保留 30 天。',
       'delete.confirm': '删除',
+      'delete.trash': '这是回收站（或包含回收站），30 天后会自动清空。',
+      'delete.doneFile': '已删除 {name}',
+      'delete.doneFolder': '已删除文件夹 {name}',
+      'restore.file': '恢复已删除的文件',
+      'restore.folder': '恢复已删除的文件夹',
+      'restore.done': '已恢复 {name}',
+      'restore.taken': '无法恢复 {name}：同名项目已再次存在。它仍在 .tmp/deleted/ 中。',
+      'restore.gone': '无法恢复 {name}：它已不在回收站中。',
+      'toast.dismiss': '关闭',
+      'menu.rename': '重命名或移动…',
+      'menu.delete': '删除…',
+      'menu.downloadZip': '下载为 .zip',
+      'menu.downloadFailed': '无法下载该文件夹（上限 {files} 个文件、{size}）。',
+      'menu.failed': '操作失败，请重试。',
       'entry.dirty': '此文件在编辑器中有未保存的修改，请先保存或放弃。',
+      'entry.dirtyFolder': '此文件夹中有文件在编辑器中有未保存的修改，请先保存或放弃。',
+      'entry.noMv': '移动文件夹需要 Harness 主机上有 GNU coreutils mv。',
+      'entry.crossDevice': '无法操作：它与目标位置位于不同的文件系统（挂载点）。',
     };
 
     const CSS = `
@@ -221,6 +285,13 @@ window.__ModuleLoader__.load({
 .dlf-dlg-actions{display:flex;justify-content:flex-end;gap:8px}
 .dlf-dlg .dlf-ed-btn[data-primary]{background:var(--dsw-alias-interactive-bg-hover)}
 .dlf-dlg .dlf-ed-btn[data-danger]{color:var(--dsw-alias-state-error-primary)}
+.dlf-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:2147483001;box-sizing:border-box;max-width:min(560px,calc(100vw - 32px));display:flex;align-items:center;gap:12px;padding:8px 8px 8px 14px;border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-label-primary,#222);color:var(--dsw-alias-bg-base,#fff);font-family:var(--dsw-font-family);font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.3)}
+.dlf-toast[data-tone=error]{background:var(--dsw-alias-state-error-primary,#b42318)}
+.dlf-toast-text{min-width:0;overflow-wrap:anywhere}
+.dlf-toast-btn{flex:none;padding:4px 10px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:inherit;font:inherit;font-weight:600;text-decoration:underline;cursor:pointer}
+.dlf-toast-btn:hover:not(:disabled),.dlf-toast-btn:focus-visible,.dlf-toast-close:hover,.dlf-toast-close:focus-visible{background:rgba(127,127,127,.25)}
+.dlf-toast-btn:disabled{opacity:.6;cursor:default}
+.dlf-toast-close{flex:none;width:24px;height:24px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:inherit;font-size:16px;line-height:1;cursor:pointer}
 `;
 
     // ───────────────────────────── icons ─────────────────────────────
@@ -810,18 +881,20 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Open sidebar tabs (preview or editor) showing a Host file. Tab addresses
-     * hold an absolute path or one relative to the session's workspace, which
-     * the browser does not know. A relative path whose suffix fits is resolved
-     * by the Host (`workspaceFiles.stat`), so `a.txt` never matches
-     * `/ws/sub/a.txt`. Only on a Harness without that call does the suffix
-     * alone decide, erring towards "this file".
+     * Open sidebar tabs (preview or editor) showing a Host file, or any file
+     * under a Host folder (`folder: true`). Tab addresses hold an absolute path
+     * or one relative to the session's workspace: with the workspace root
+     * (`cwd`) known it is joined to it; without it, a relative path whose
+     * suffix fits is resolved by the Host (`workspaceFiles.stat`), so `a.txt`
+     * never matches `/ws/sub/a.txt`. Only on a Harness without that call does
+     * the suffix alone decide, erring towards "this file".
      */
     async function tabsShowing(
       sidebarRight: SidebarRight,
       remote: { workspaceFiles: RemoteWorkspaceFiles },
       sessionId: string,
       absolutePath: string,
+      options: { cwd?: string | undefined; folder?: boolean } = {},
     ) {
       let tabs: readonly { id: string; kind: string; contentId: string }[] = [];
       try {
@@ -829,14 +902,18 @@ window.__ModuleLoader__.load({
       } catch {
         return [];
       }
+      const covers = (path: string) =>
+        path === absolutePath ||
+        (options.folder === true && path.startsWith(`${absolutePath.replace(/\/+$/, '')}/`));
       const shows = async (path: string) => {
-        if (path.startsWith('/')) return path === absolutePath;
-        if (!absolutePath.endsWith(`/${path}`)) return false;
+        if (path.startsWith('/')) return covers(path);
+        if (options.cwd !== undefined) return covers(resolveWorkspacePath(options.cwd, path));
+        if (options.folder !== true && !absolutePath.endsWith(`/${path}`)) return false;
         const stat = remote.workspaceFiles.stat;
-        if (typeof stat !== 'function') return true;
+        if (typeof stat !== 'function') return options.folder !== true;
         try {
           const result = await stat.call(remote.workspaceFiles, sessionId, path);
-          return result.ok && result.value.absolutePath === absolutePath;
+          return result.ok && covers(result.value.absolutePath);
         } catch {
           return false;
         }
@@ -861,114 +938,374 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** What differs between the Rename and Delete toolbar buttons. */
+    /** Same as the stock resolveWorkspacePath: a relative path joined to the workspace root. */
+    function resolveWorkspacePath(cwd: string | undefined, path: string): string {
+      if (path.startsWith('/') || cwd === undefined || cwd === '') return path;
+      return `${cwd.replace(/\/+$/, '')}/${path.replace(/^(?:\.?\/)+/, '')}`;
+    }
+
+    /** What a folder download may hold; keep in step with FOLDER_LIMITS in src/folder-route.ts. */
+    const FOLDER_LIMITS = { files: '20,000', size: '2 GiB' };
+    /** How long the Restore button stays after a delete. */
+    const RESTORE_MS = 10_000;
+
+    /** A file or folder a menu action acts on. */
+    interface EntryTarget {
+      kind: 'file' | 'folder';
+      sessionId: string;
+      absolutePath: string;
+      cwd?: string | undefined;
+    }
+
+    /** The open dialog (rename/delete) and the toast after a delete, shared by all menus. */
+    type EntryDialog = { action: 'rename' | 'delete'; target: EntryTarget } | undefined;
+    interface EntryToast {
+      id: number;
+      name: string;
+      kind: 'file' | 'folder';
+      state: 'deleted' | 'restoring' | 'restored' | 'failed';
+      error?: string | undefined;
+      sessionId: string;
+      restoreToken?: string | undefined;
+      /** Tabs the delete closed, reopened by a restore. */
+      reopen: string[];
+    }
+    const entryUi = {
+      dialog: undefined as EntryDialog,
+      toast: undefined as EntryToast | undefined,
+      listeners: new Set<() => void>(),
+      revision: 0,
+      set(change: { dialog?: EntryDialog; toast?: EntryToast | undefined }) {
+        if ('dialog' in change) entryUi.dialog = change.dialog;
+        if ('toast' in change) entryUi.toast = change.toast;
+        entryUi.revision += 1;
+        for (const listener of entryUi.listeners) listener();
+      },
+      subscribe: (listener: () => void) => {
+        entryUi.listeners.add(listener);
+        return () => {
+          entryUi.listeners.delete(listener);
+        };
+      },
+      snapshot: () => entryUi.revision,
+    };
+    let toastIds = 0;
+
+    /** Routes and labels that differ between files and folders. */
     const ENTRY_KINDS = {
-      rename: { label: 'rename.title', marker: 'data-rename-file', icon: RenameIcon },
-      delete: { label: 'delete.title', marker: 'data-delete-file', icon: DeleteIcon },
+      file: {
+        rename: RENAME_FILE_ROUTE,
+        delete: DELETE_FILE_ROUTE,
+        deleteTitle: 'delete.title',
+        dirty: 'entry.dirty',
+      },
+      folder: {
+        rename: RENAME_FOLDER_ROUTE,
+        delete: DELETE_FOLDER_ROUTE,
+        deleteTitle: 'delete.folderTitle',
+        dirty: 'entry.dirtyFolder',
+      },
     } as const;
 
-    /** Rename/move and Delete for the file shown in the sidebar preview. */
-    function EntryButtons({
-      sessionId,
-      absolutePath,
+    /** Message key for a failed rename/delete/restore. */
+    function entryErrorKey(res: { status: number; body: any }, kind: 'file' | 'folder'): string {
+      if (res.status === 501) return 'entry.noMv';
+      if (res.status === 422 && /filesystem/.test(String(res.body?.error)))
+        return 'entry.crossDevice';
+      if (res.status === 400 && /into itself/.test(String(res.body?.error)))
+        return 'rename.intoItself';
+      if (res.status === 403 && /trash/.test(String(res.body?.error))) return 'delete.trash';
+      if (res.status === 404 && kind === 'folder' && res.body?.error !== 'session not found')
+        return 'rename.missingFolder';
+      return mutationErrorKey(res, 'file');
+    }
+
+    /** "3 files, 2 folders (1.2 MiB)" for the folder delete question. */
+    async function folderSummary(absolutePath: string) {
+      try {
+        const url = new URL(SUMMARY_ROUTE, document.baseURI);
+        url.searchParams.set('path', absolutePath);
+        const res = await fetch(url.href);
+        if (!res.ok) return undefined;
+        return (await res.json()) as {
+          files: number;
+          folders: number;
+          bytes: number;
+          truncated: boolean;
+          downloadable: boolean;
+        };
+      } catch {
+        return undefined;
+      }
+    }
+
+    /** The rename or delete dialog the menus open (mounted once, on shell.overlay). */
+    function EntryDialogView({
+      dialog,
       sidebarRight,
       remote,
       t,
     }: {
-      sessionId?: unknown;
-      absolutePath?: unknown;
+      dialog: NonNullable<EntryDialog>;
       sidebarRight: SidebarRight;
       remote: { workspaceFiles: RemoteWorkspaceFiles };
       t: Translate;
     }) {
-      const [open, setOpen] = React.useState(undefined);
-      if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
+      const { action, target } = dialog;
+      const { kind, sessionId, absolutePath, cwd } = target;
+      const spec = ENTRY_KINDS[kind];
       const name = baseName(absolutePath);
-      /** This file's open tabs, and the error key when one holds unsaved edits. */
-      const fileTabs = async () => {
-        const tabs = await tabsShowing(sidebarRight, remote, sessionId, absolutePath);
+      const [summary, setSummary] = React.useState(undefined);
+      React.useEffect(() => {
+        if (action !== 'delete' || kind !== 'folder') return;
+        let live = true;
+        folderSummary(absolutePath).then((s) => {
+          if (live) setSummary(s ?? null);
+        });
+        return () => {
+          live = false;
+        };
+      }, [action, kind, absolutePath]);
+      const onClose = () => entryUi.set({ dialog: undefined });
+      /** Open tabs of the entry, and the error key when one holds unsaved edits. */
+      const entryTabs = async () => {
+        const tabs = await tabsShowing(sidebarRight, remote, sessionId, absolutePath, {
+          cwd,
+          folder: kind === 'folder',
+        });
         const dirty = tabs.some((tab) => dirtyTabs.ids.has(dirtyKey(sessionId, tab.id)));
-        return { ids: tabs.map((tab) => tab.id), blocked: dirty ? 'entry.dirty' : undefined };
+        return { tabs, blocked: dirty ? spec.dirty : undefined };
       };
-      const button = (kind: keyof typeof ENTRY_KINDS) => {
-        const spec = ENTRY_KINDS[kind];
-        const label = t(spec.label);
-        return h(
-          'div',
-          {
-            className: 'dlf-split',
-            'data-size': 'compact',
-            [spec.marker]: '',
-          },
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'dlf-main',
-              title: label,
-              'aria-label': label,
-              onClick: () => setOpen(kind),
-            },
-            h(spec.icon, { size: 13 }),
-          ),
-        );
-      };
-      return h(
-        React.Fragment,
-        null,
-        button('rename'),
-        button('delete'),
-        open === 'rename' &&
-          h(NameDialog, {
-            title: t('rename.title'),
-            where: absolutePath,
-            hint: t('rename.hint'),
-            initial: name,
-            confirm: t('rename.confirm'),
-            t,
-            onClose: () => setOpen(undefined),
-            submit: async (destination: string) => {
-              const { ids: before, blocked } = await fileTabs();
-              if (blocked !== undefined) return blocked;
-              const res = await postJson(RENAME_FILE_ROUTE, {
+      if (action === 'rename') {
+        return h(NameDialog, {
+          title: t(kind === 'file' ? 'rename.title' : 'rename.folderTitle'),
+          where: absolutePath,
+          hint: t('rename.hint'),
+          initial: name,
+          confirm: t('rename.confirm'),
+          t,
+          onClose,
+          submit: async (destination: string) => {
+            const { tabs, blocked } = await entryTabs();
+            if (blocked !== undefined) return blocked;
+            const res = await postJson(spec.rename, { sessionId, path: absolutePath, destination });
+            if (!res.ok) return entryErrorKey(res, kind);
+            const moved = res.body.absolutePath;
+            if (moved !== absolutePath) {
+              closeTabs(
+                sidebarRight,
                 sessionId,
-                path: absolutePath,
-                destination,
-              });
-              if (!res.ok) return mutationErrorKey(res, 'file');
-              if (res.body.absolutePath !== absolutePath) {
-                closeTabs(sidebarRight, sessionId, before);
+                tabs.map((tab) => tab.id),
+              );
+              // A renamed file reopens; a folder's files reopen at their new place.
+              for (const tab of kind === 'file' ? [{ contentId: '' }] : tabs) {
+                const old = parseFileAddress(tab.contentId)?.path;
+                const path =
+                  kind === 'file'
+                    ? moved
+                    : `${moved}${resolveWorkspacePath(cwd, old ?? '').slice(absolutePath.length)}`;
+                if (kind === 'folder' && old === undefined) continue;
                 try {
-                  sidebarRight.openResource(
-                    sessionFileAddress(sessionId, res.body.absolutePath),
-                    {},
-                  );
+                  sidebarRight.openResource(sessionFileAddress(sessionId, path), {});
                 } catch (error) {
                   console.warn('open renamed file rejected:', error);
                 }
               }
-              return undefined;
+            }
+            return undefined;
+          },
+        });
+      }
+      const question =
+        kind === 'file'
+          ? t('delete.question', { name })
+          : summary === undefined
+            ? t('delete.counting')
+            : summary === null
+              ? t('delete.folderQuestion', { name })
+              : summary.files + summary.folders === 0
+                ? t('delete.emptyFolderQuestion', { name })
+                : t(summary.truncated ? 'delete.folderMany' : 'delete.folderContents', {
+                    name,
+                    files: summary.files,
+                    folders: summary.folders,
+                    size: formatSize(summary.bytes),
+                  });
+      return h(NameDialog, {
+        title: t(spec.deleteTitle),
+        where: absolutePath,
+        hint: `${question} ${t('delete.trashNote')}`,
+        confirm: t('delete.confirm'),
+        danger: true,
+        t,
+        onClose,
+        submit: async () => {
+          const { tabs, blocked } = await entryTabs();
+          if (blocked !== undefined) return blocked;
+          const res = await postJson(spec.delete, { sessionId, path: absolutePath });
+          if (!res.ok) return entryErrorKey(res, kind);
+          closeTabs(
+            sidebarRight,
+            sessionId,
+            tabs.map((tab) => tab.id),
+          );
+          // Only the last deletion can be restored: this toast replaces any other.
+          entryUi.set({
+            toast: {
+              id: ++toastIds,
+              name,
+              kind,
+              state: 'deleted',
+              sessionId,
+              restoreToken: res.body.restoreToken,
+              reopen: tabs.map((tab) => tab.contentId),
             },
-          }),
-        open === 'delete' &&
-          h(NameDialog, {
-            title: t('delete.title'),
-            where: absolutePath,
-            hint: t('delete.question', { name }),
-            confirm: t('delete.confirm'),
-            danger: true,
-            t,
-            onClose: () => setOpen(undefined),
-            submit: async () => {
-              const { ids: before, blocked } = await fileTabs();
-              if (blocked !== undefined) return blocked;
-              const res = await postJson(DELETE_FILE_ROUTE, { sessionId, path: absolutePath });
-              if (!res.ok) return mutationErrorKey(res, 'file');
-              closeTabs(sidebarRight, sessionId, before);
-              return undefined;
+          });
+          return undefined;
+        },
+      });
+    }
+
+    /**
+     * "Deleted <name> · Restore", for {@link RESTORE_MS} after a delete, like
+     * Gmail's undo. The timer pauses while the pointer or focus is on it.
+     */
+    function EntryToastView({
+      toast,
+      sidebarRight,
+      t,
+    }: {
+      toast: EntryToast;
+      sidebarRight: SidebarRight;
+      t: Translate;
+    }) {
+      const [held, setHeld] = React.useState(false);
+      const settled = toast.state === 'restored' || toast.state === 'failed';
+      React.useEffect(() => {
+        if (held || toast.state === 'restoring') return;
+        const timer = setTimeout(
+          () => {
+            if (entryUi.toast?.id === toast.id) entryUi.set({ toast: undefined });
+          },
+          settled ? ERROR_MS : RESTORE_MS,
+        );
+        return () => clearTimeout(timer);
+      }, [held, toast.id, toast.state, settled]);
+      const restore = async () => {
+        if (toast.restoreToken === undefined) return;
+        entryUi.set({ toast: { ...toast, state: 'restoring' } });
+        let res: { status: number; ok: boolean; body: any };
+        try {
+          res = await postJson(RESTORE_ROUTE, {
+            sessionId: toast.sessionId,
+            restoreToken: toast.restoreToken,
+          });
+        } catch {
+          res = { status: 0, ok: false, body: {} };
+        }
+        if (entryUi.toast?.id !== toast.id) return;
+        if (!res.ok) {
+          const error =
+            res.status === 409
+              ? 'restore.taken'
+              : res.status === 404
+                ? 'restore.gone'
+                : entryErrorKey(res, toast.kind);
+          entryUi.set({ toast: { ...toast, state: 'failed', error } });
+          return;
+        }
+        for (const address of toast.reopen) {
+          try {
+            sidebarRight.openResource(address, {});
+          } catch (error) {
+            console.warn('reopen restored file rejected:', error);
+          }
+        }
+        entryUi.set({ toast: { ...toast, state: 'restored', restoreToken: undefined } });
+      };
+      const text =
+        toast.state === 'restored'
+          ? t('restore.done', { name: toast.name })
+          : toast.state === 'failed'
+            ? t(toast.error ?? 'create.failed', { name: toast.name })
+            : t(toast.kind === 'file' ? 'delete.doneFile' : 'delete.doneFolder', {
+                name: toast.name,
+              });
+      const dialog = h(
+        'div',
+        {
+          className: 'dlf-toast',
+          role: toast.state === 'failed' ? 'alert' : 'status',
+          'aria-live': 'polite',
+          'data-dlf-toast': toast.state,
+          'data-tone': toast.state === 'failed' ? 'error' : undefined,
+          onMouseEnter: () => setHeld(true),
+          onMouseLeave: () => setHeld(false),
+          onFocus: () => setHeld(true),
+          onBlur: () => setHeld(false),
+        },
+        h('span', { className: 'dlf-toast-text' }, text),
+        !settled &&
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dlf-toast-btn',
+              'data-dlf-restore': '',
+              disabled: toast.state === 'restoring',
+              onClick: restore,
             },
-          }),
+            t(toast.kind === 'file' ? 'restore.file' : 'restore.folder'),
+          ),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dlf-toast-close',
+            'aria-label': t('toast.dismiss'),
+            onClick: () => entryUi.set({ toast: undefined }),
+          },
+          '×',
+        ),
       );
+      return ReactDOM?.createPortal ? ReactDOM.createPortal(dialog, document.body) : dialog;
+    }
+
+    /** The dialog and toast the menu actions drive; mounted once on shell.overlay. */
+    function EntryOverlay({
+      sidebarRight,
+      remote,
+      t,
+    }: {
+      sidebarRight: SidebarRight;
+      remote: { workspaceFiles: RemoteWorkspaceFiles };
+      t: Translate;
+    }) {
+      React.useSyncExternalStore(entryUi.subscribe, entryUi.snapshot);
+      const { dialog, toast } = entryUi;
+      return h(
+        React.Fragment,
+        null,
+        dialog !== undefined &&
+          h(EntryDialogView, {
+            key: `${dialog.action}:${dialog.target.absolutePath}`,
+            dialog,
+            sidebarRight,
+            remote,
+            t,
+          }),
+        toast !== undefined && h(EntryToastView, { key: toast.id, toast, sidebarRight, t }),
+      );
+    }
+
+    /** Download a folder as .zip; rejects (the menu shows the failure) when too large or gone. */
+    async function downloadFolder(absolutePath: string): Promise<void> {
+      const summary = await folderSummary(absolutePath);
+      if (summary === undefined) throw new Error('folder unavailable');
+      if (!summary.downloadable) throw new Error('folder too large');
+      const url = new URL(DOWNLOAD_FOLDER_ROUTE, document.baseURI);
+      url.searchParams.set('path', absolutePath);
+      startDownload(url.href);
     }
 
     // ─────────────────────── text helpers (pure) ───────────────────────
@@ -1814,9 +2151,41 @@ window.__ModuleLoader__.load({
 
     // ───────────────────────────── plugin body ─────────────────────────────
 
+    /** One entry of the stock context menu (`@deepseek-ai/dsh-client-ui-context-menu`). */
+    interface MenuAction {
+      id: string;
+      label: string;
+      icon?: { key: string };
+      danger?: boolean;
+      disabled?: boolean;
+      separatorBefore?: boolean;
+      failureLabel?: string;
+      run?: () => void | Promise<void>;
+    }
+    /** The parts of `ctx.contextMenus` (DSH ≥ 0.2.2-rc.1) the plugin uses. */
+    interface ContextMenus {
+      register(contribution: {
+        id: string;
+        target: 'file' | 'directory';
+        order: number;
+        resolve(
+          target: { sessionId: string; path: string },
+          signal: AbortSignal,
+        ): readonly MenuAction[] | Promise<readonly MenuAction[]>;
+      }): () => void;
+    }
+    /** The parts of the Client `sessions` service the menus use: a session's workspace root. */
+    interface ClientSessions {
+      list: { getSnapshot(): { byId: Record<string, { cwd?: string | undefined } | undefined> } };
+    }
+
     /** The client context cordis assembles from the `inject` list below. */
     interface ClientCtx {
       effect(callback: () => unknown, label?: string): unknown;
+      /** Run `callback` in a child scope once these optional services exist. */
+      inject?(deps: string[], callback: (scope: ClientCtx) => void): unknown;
+      contextMenus?: ContextMenus;
+      sessions?: ClientSessions;
       slots: {
         inject(name: string, factory: () => unknown): unknown;
         register(
@@ -1899,13 +2268,6 @@ window.__ModuleLoader__.load({
                   t,
                 }),
                 h(DownloadButton, { url: pathUrl(props.absolutePath), t }),
-                h(EntryButtons, {
-                  sessionId: props.sessionId,
-                  absolutePath: props.absolutePath,
-                  sidebarRight: ctx.sidebarRight,
-                  remote: ctx.remote,
-                  t,
-                }),
               )
             : null;
         const PathDownloadProminent = (props: { absolutePath?: unknown }) =>
@@ -1977,6 +2339,102 @@ window.__ModuleLoader__.load({
             FilesTabNewFolder,
           ),
         );
+
+        // ── file and folder actions: the Files tree's right-click menu ──
+        // The dialogs and the Restore toast, mounted once for every menu.
+        const Overlay = () =>
+          h(EntryOverlay, { sidebarRight: ctx.sidebarRight, remote: ctx.remote, t });
+        ctx.slots.inject('shell.overlay', () =>
+          ctx.slots.register(
+            { name: 'shell.overlay', id: `${EDITOR_ID}/entry-actions`, locale: NS },
+            Overlay,
+          ),
+        );
+        // The menus need the stock context menu (DSH >= 0.2.2-rc.1); without it,
+        // everything else still loads.
+        const registerMenus = (scope: ClientCtx) => {
+          const menus = scope.contextMenus as ContextMenus;
+          const sessions = scope.sessions as ClientSessions;
+          // A generator registers several entries under one inject, like the stock plugins do.
+          scope.slots.inject('contextMenu.icon', function* () {
+            for (const [key, Icon] of [
+              ['always-on.rename', RenameIcon],
+              ['always-on.delete', DeleteIcon],
+              ['always-on.zip', DownloadIcon],
+            ] as const) {
+              yield scope.slots.register({ name: 'contextMenu.icon', key }, () =>
+                h(Icon, { size: 16 }),
+              );
+            }
+          });
+          const targetOf = (kind: 'file' | 'folder', sessionId: string, path: string) => {
+            const cwd = sessions.list.getSnapshot().byId[sessionId]?.cwd;
+            const absolutePath = resolveWorkspacePath(cwd, path);
+            return { kind, sessionId, absolutePath, cwd } as EntryTarget;
+          };
+          const entryActions = (target: EntryTarget): MenuAction[] => {
+            const root =
+              target.cwd !== undefined &&
+              target.absolutePath.replace(/\/+$/, '') === target.cwd.replace(/\/+$/, '');
+            const open = (action: 'rename' | 'delete') => () => {
+              entryUi.set({ dialog: { action, target } });
+            };
+            return [
+              {
+                id: 'rename',
+                label: t('menu.rename'),
+                icon: { key: 'always-on.rename' },
+                separatorBefore: true,
+                disabled: root || !target.absolutePath.startsWith('/'),
+                run: open('rename'),
+              },
+              {
+                id: 'delete',
+                label: t('menu.delete'),
+                icon: { key: 'always-on.delete' },
+                danger: true,
+                disabled: root || !target.absolutePath.startsWith('/'),
+                run: open('delete'),
+              },
+            ];
+          };
+          scope.effect(
+            () =>
+              menus.register({
+                id: 'always-on.directory',
+                target: 'directory',
+                order: 300,
+                resolve: ({ sessionId, path }) => {
+                  const target = targetOf('folder', sessionId, path);
+                  return [
+                    ...entryActions(target),
+                    {
+                      id: 'zip',
+                      label: t('menu.downloadZip'),
+                      icon: { key: 'always-on.zip' },
+                      separatorBefore: true,
+                      disabled: !target.absolutePath.startsWith('/'),
+                      failureLabel: t('menu.downloadFailed', FOLDER_LIMITS),
+                      run: () => downloadFolder(target.absolutePath),
+                    },
+                  ];
+                },
+              }),
+            'always-on: folder menu',
+          );
+          scope.effect(
+            () =>
+              menus.register({
+                id: 'always-on.file',
+                target: 'file',
+                order: 300,
+                resolve: ({ sessionId, path }) => entryActions(targetOf('file', sessionId, path)),
+              }),
+            'always-on: file menu',
+          );
+        };
+        if (typeof ctx.inject === 'function')
+          ctx.inject(['contextMenus', 'sessions'], registerMenus);
 
         // ── sidebar editor tab ──
         ctx.effect(
