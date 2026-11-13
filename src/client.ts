@@ -149,7 +149,7 @@ window.__ModuleLoader__.load({
       'delete.folderMany': 'Delete {name} and its more than {files} files and {folders} folders?',
       'delete.counting': 'Counting what is inside…',
       'delete.trashNote':
-        'It goes to .tmp/deleted/ in the workspace, where it is kept for 30 days.',
+        'It moves to a .tmp/deleted/ folder on the same disk, where it is kept for 30 days.',
       'delete.confirm': 'Delete',
       'delete.trash': 'This is the trash (or holds it); it empties itself after 30 days.',
       'delete.doneFile': 'Deleted {name}',
@@ -172,6 +172,7 @@ window.__ModuleLoader__.load({
       'entry.noMv': 'Moving folders needs GNU coreutils mv on the Harness host.',
       'entry.crossDevice':
         'Not possible: this is on another filesystem (a mount) than where it would go.',
+      'entry.mountPoint': 'This is a mount point, so it cannot be deleted. Unmount it first.',
     };
     const zh = {
       'download.title': '下载文件',
@@ -227,7 +228,7 @@ window.__ModuleLoader__.load({
         '要删除 {name} 及其中的 {files} 个文件、{folders} 个文件夹（{size}）吗？',
       'delete.folderMany': '要删除 {name} 及其中超过 {files} 个文件和 {folders} 个文件夹吗？',
       'delete.counting': '正在统计内容…',
-      'delete.trashNote': '它会移到工作区的 .tmp/deleted/ 中，保留 30 天。',
+      'delete.trashNote': '它会移到同一磁盘上的 .tmp/deleted/ 文件夹，保留 30 天。',
       'delete.confirm': '删除',
       'delete.trash': '这是回收站（或包含回收站），30 天后会自动清空。',
       'delete.doneFile': '已删除 {name}',
@@ -247,6 +248,7 @@ window.__ModuleLoader__.load({
       'entry.dirtyFolder': '此文件夹中有文件在编辑器中有未保存的修改，请先保存或放弃。',
       'entry.noMv': '移动文件夹需要 Harness 主机上有 GNU coreutils mv。',
       'entry.crossDevice': '无法操作：它与目标位置位于不同的文件系统（挂载点）。',
+      'entry.mountPoint': '这是一个挂载点，无法删除。请先卸载。',
     };
 
     // The last rule hides the stock "This Host has no desktop…" note above presented
@@ -1018,6 +1020,8 @@ span:has(+[data-presented-files-row]){display:none}
     /** Message key for a failed rename/delete/restore. */
     function entryErrorKey(res: { status: number; body: any }, kind: 'file' | 'folder'): string {
       if (res.status === 501) return 'entry.noMv';
+      if (res.status === 422 && /mount point/.test(String(res.body?.error)))
+        return 'entry.mountPoint';
       if (res.status === 422 && /filesystem/.test(String(res.body?.error)))
         return 'entry.crossDevice';
       if (res.status === 400 && /into itself/.test(String(res.body?.error)))

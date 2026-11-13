@@ -6,14 +6,19 @@
  * after {@link TRASH_DAYS} days.
  *
  * The trash stays inside the root on purpose: a move within one filesystem
- * is a rename (instant, atomic for folders), and it stays inside what the
- * session may write, so the fence needs no exception for it.
+ * is a rename (instant, atomic for folders, no copy), and it stays inside
+ * what the session may write, so the fence needs no exception for it.
+ *
+ * An entry on ANOTHER filesystem than its root (a volume mounted inside the
+ * workspace) gets the trash at the top of that mount instead
+ * ({@link trashRootFor}), so its delete is a rename too rather than a silent
+ * copy of the whole entry into the workspace's disk.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import type { SandboxPolicy } from './context.ts';
-import { type Entry, moveNoReplace } from './entry.ts';
+import { codedError, type Entry, moveNoReplace } from './entry.ts';
 import { FenceError } from './fence.ts';
 import { undoMkdir } from './paths.ts';
 
@@ -50,13 +55,8 @@ export function slotTime(name: string): number | undefined {
   return Date.UTC(y as number, (mo as number) - 1, d, h, mi, s);
 }
 
-/**
- * The canonical root an entry belongs to: the workspace root or extra
- * writable root containing it. In danger-full-access an entry outside every
- * root goes to the workspace root's trash.
- */
-async function rootOf(policy: SandboxPolicy, hostPath: string): Promise<string> {
-  const path = join(await realpath(dirname(hostPath)), basename(hostPath));
+/** The canonical workspace and extra writable roots of a policy; missing roots hold nothing. */
+async function writableRoots(policy: SandboxPolicy): Promise<string[]> {
   const roots: string[] = [];
   for (const root of [policy.workspaceRoot, ...(policy.additionalWritableRoots ?? [])]) {
     try {
@@ -65,13 +65,46 @@ async function rootOf(policy: SandboxPolicy, hostPath: string): Promise<string> 
       /* a missing root holds nothing */
     }
   }
+  return roots;
+}
+
+/**
+ * The directory whose `.tmp/deleted` a delete of `hostPath` uses: the deepest
+ * writable root holding it, or — when the entry is on another filesystem than
+ * that root (a volume mounted inside the workspace) — the top of that mount,
+ * which is the only place a move stays a rename instead of a copy.
+ *
+ * An entry that is itself a mount point is refused (`EBUSY`): it cannot move
+ * anywhere on its own filesystem, and moving its whole contents would copy
+ * a volume.
+ */
+export async function trashRootFor(policy: SandboxPolicy, hostPath: string): Promise<string> {
+  const info = await lstat(hostPath);
+  const path = join(await realpath(dirname(hostPath)), basename(hostPath));
+  const roots = await writableRoots(policy);
   // The deepest root wins when roots nest.
   const holder = roots
     .filter((root) => path !== root && isUnder(path, root))
     .sort((a, b) => b.length - a.length)[0];
-  if (holder !== undefined) return holder;
-  if (policy.mode === 'danger-full-access' && roots[0] !== undefined) return roots[0];
-  throw new FenceError(`"${hostPath}" is in no writable root`);
+  if (holder === undefined) {
+    // danger-full-access, outside every root: the workspace's trash, a copy away.
+    if (policy.mode === 'danger-full-access' && roots[0] !== undefined) return roots[0];
+    throw new FenceError(`"${hostPath}" is in no writable root`);
+  }
+  if ((await lstat(holder)).dev === info.dev) return holder;
+  // A mount inside the holder: the trash goes under the mount point. `path` is
+  // canonical, so a symlink named on the way is resolved, not a boundary.
+  const parent = dirname(path);
+  if ((await lstat(parent)).dev !== info.dev)
+    throw codedError(`"${hostPath}" is a mount point, so it cannot be moved to the trash`, 'EBUSY');
+  let top = parent;
+  while (true) {
+    const up = dirname(top);
+    if (up === top || !isUnder(up, holder)) break;
+    if ((await lstat(up)).dev !== info.dev) break;
+    top = up;
+  }
+  return top;
 }
 
 /**
@@ -128,7 +161,7 @@ export async function trashRelation(
   policy: SandboxPolicy,
   hostPath: string,
 ): Promise<'inside' | 'holds' | 'none'> {
-  const root = await rootOf(policy, hostPath);
+  const root = await trashRootFor(policy, hostPath);
   const path = join(await realpath(dirname(hostPath)), basename(hostPath));
   const trash = join(root, TRASH_DIR);
   if (path !== trash && isUnder(path, trash)) return 'inside';
@@ -145,7 +178,7 @@ export async function moveToTrash(
   sessionId: string,
   now = new Date(),
 ): Promise<Trashed> {
-  const root = await rootOf(entry.policy, entry.hostPath);
+  const root = await trashRootFor(entry.policy, entry.hostPath);
   const trashDir = await trashDirOf(root);
   const slot = join(trashDir, slotName(now));
   const first = await mkdir(slot, { recursive: true });

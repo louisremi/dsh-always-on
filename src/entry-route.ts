@@ -53,6 +53,7 @@ function entryStatus(error: unknown): number {
   if (code === 'ENOSYS') return 501;
   if (code === 'EINVAL') return 400;
   if (code === 'ENOTEMPTY') return 409;
+  if (code === 'EBUSY') return 422;
   return mutationStatus(error);
 }
 
@@ -66,6 +67,7 @@ function handleEntry(request: Request, run: () => Promise<Response>): Promise<Re
       if (code === 'EXDEV')
         return fail(422, 'on another filesystem: it cannot be moved there or to the trash');
       if (code === 'ENOSYS') return fail(501, 'moving folders needs GNU coreutils mv on the Host');
+      if (code === 'EBUSY') return fail(422, 'a mount point cannot be moved to the trash');
       throw error;
     }
   });

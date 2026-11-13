@@ -9,7 +9,9 @@
  */
 import assert from 'node:assert/strict';
 import {
+  accessSync,
   chmodSync,
+  constants,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -44,7 +46,7 @@ import { canonicalPath, landedInside, mayWrite } from '../src/fence.ts';
 import { handleDownloadFolder, handleFolderSummary } from '../src/folder-route.ts';
 import { undoMkdir } from '../src/paths.ts';
 import { handleSave } from '../src/save-route.ts';
-import { purgeTrash, slotName, slotTime } from '../src/trash.ts';
+import { purgeTrash, slotName, slotTime, trashRelation, trashRootFor } from '../src/trash.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
 // sandbox, `outside` a sibling it must not reach. NOT under the OS temp dir:
@@ -72,16 +74,19 @@ interface HostOptions {
   backend?: 'sandbox' | 'local';
   /** Extra directories workspace-write may write under. */
   extraRoots?: string[];
+  /** The session's workspace root; defaults to the fixture workspace. */
+  workspaceRoot?: string;
 }
 
 /** The Harness services the routes consume, built from the real packages. */
 function realHost(mode: Mode = 'workspace-write', options: HostOptions = {}) {
+  const workspaceRoot = options.workspaceRoot ?? workspace;
   const policy = {
     defaultMode: mode,
-    workspaceRoot: workspace,
+    workspaceRoot,
     resolve: ({ session }: { session: LiveSession }) => ({
       mode,
-      workspaceRoot: workspace,
+      workspaceRoot,
       additionalWritableRoots: options.extraRoots,
       sessionId: session.id,
     }),
@@ -744,6 +749,95 @@ test('a trash that is a symlink is refused: nothing is deleted', async () => {
   assert.equal((await remove(host, join(root, 'v.txt'))).status, 403);
   assert.equal(readFileSync(join(root, 'v.txt'), 'utf8'), 'v');
   assert.deepEqual(readdirSync(join(outside, 'fake-tmp')), []);
+});
+
+/**
+ * A real mount point this process may write in: another filesystem than the
+ * fixtures', and the top of that filesystem — which is exactly what makes a
+ * path's `st_dev` differ from its parent's, like a volume mounted inside a
+ * workspace. Nothing can be mounted in CI, but every Linux box has one.
+ */
+const volume = ((): string | undefined => {
+  for (const candidate of ['/dev/shm', '/tmp', '/run', '/var/tmp']) {
+    try {
+      const real = realpathSync(candidate);
+      accessSync(real, constants.W_OK);
+      if (statSync(real).dev === statSync(fixtures).dev) continue;
+      if (statSync(dirname(real)).dev === statSync(real).dev) continue;
+      return real;
+    } catch {
+      /* not there, or not writable */
+    }
+  }
+  return undefined;
+})();
+
+test('a delete on a volume mounted inside the workspace trashes it on that volume, as a rename', {
+  skip: volume === undefined && 'no second filesystem to stand in for a mount',
+}, async () => {
+  const mount = join(volume as string, `.dlf-mount-${process.pid}`);
+  const madeTemp = !existsSync(join(volume as string, '.tmp'));
+  mkdirSync(join(mount, 'dir'), { recursive: true });
+  writeFileSync(join(mount, 'x.txt'), 'x');
+  writeFileSync(join(mount, 'dir', 'y.txt'), 'y');
+  // With `/` as the workspace root, `mount` is a mount inside the workspace.
+  const host = realHost('workspace-write', { workspaceRoot: '/' }).save;
+  const trash = join(volume as string, '.tmp', 'deleted');
+  try {
+    const file = await remove(host, join(mount, 'x.txt'));
+    assert.equal(file.status, 200);
+    const body = await file.json();
+    assert.ok(
+      body.trashedPath.startsWith(`${trash}/`),
+      `trashed onto the volume itself, not copied into the workspace: ${body.trashedPath}`,
+    );
+    assert.equal(readFileSync(body.trashedPath, 'utf8'), 'x');
+    assert.ok(!existsSync(join(mount, 'x.txt')));
+    // Restore is a rename back, onto the same volume.
+    assert.equal((await restore(host, body.restoreToken)).status, 200);
+    assert.equal(readFileSync(join(mount, 'x.txt'), 'utf8'), 'x');
+    // A whole folder of the volume too.
+    const folder = await removeFolder(host, join(mount, 'dir'));
+    assert.equal(folder.status, 200);
+    const trashedFolder = (await folder.json()).trashedPath;
+    assert.ok(trashedFolder.startsWith(`${trash}/`), trashedFolder);
+    assert.equal(readFileSync(join(trashedFolder, 'y.txt'), 'utf8'), 'y');
+    assert.ok(!existsSync(join(mount, 'dir')));
+    // The trash of the volume is protected like the workspace's.
+    assert.equal((await removeFolder(host, trashedFolder)).status, 403);
+    assert.equal((await removeFolder(host, join(volume as string, '.tmp'))).status, 403);
+    // The mount point itself cannot be trashed: it can move nowhere on its
+    // own filesystem, and copying a whole volume is not a delete.
+    const policy = { mode: 'workspace-write', workspaceRoot: '/' };
+    await assert.rejects(trashRootFor(policy, volume as string), { code: 'EBUSY' });
+    assert.equal(await trashRelation(policy, join(volume as string, '.tmp')), 'holds');
+    assert.equal(await trashRelation(policy, trashedFolder), 'inside');
+    assert.equal(await trashRelation(policy, join(mount, 'x.txt')), 'none');
+    assert.ok(existsSync(volume as string), 'the mount point is still there');
+  } finally {
+    rmSync(mount, { recursive: true, force: true });
+    if (madeTemp) rmSync(join(volume as string, '.tmp'), { recursive: true, force: true });
+  }
+});
+
+test('a delete outside every root in danger mode still lands in the workspace trash', {
+  skip: volume === undefined && 'no second filesystem',
+}, async () => {
+  // No mount here: the entry is on another filesystem AND outside the root,
+  // where the plugin has no directory of its own to put a trash in.
+  const mount = join(volume as string, `.dlf-outside-${process.pid}`);
+  mkdirSync(mount);
+  writeFileSync(join(mount, 'z.txt'), 'z');
+  const host = realHost('danger-full-access').save;
+  try {
+    const res = await remove(host, join(mount, 'z.txt'));
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.trashedPath.startsWith(`${join(workspace, '.tmp', 'deleted')}/`));
+    assert.equal(readFileSync(body.trashedPath, 'utf8'), 'z');
+  } finally {
+    rmSync(mount, { recursive: true, force: true });
+  }
 });
 
 test('purgeTrash removes old slots only, never following symlinks', async () => {

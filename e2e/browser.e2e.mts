@@ -839,6 +839,28 @@ await check(
   },
 );
 
+await check('Delete: a mount point says so instead of blaming the Host path', async (page) => {
+  const d = join(dir, 'mounted');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'f.txt'), 'f');
+  await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(join(d, 'f.txt'))}`);
+  await page.route('**/api/delete.folder', (route: any) =>
+    route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'a mount point cannot be moved to the trash' }),
+    }),
+  );
+  await menuRun(page, 'directory', d, 'delete');
+  await page.click('[data-dlf-dialog] button[type=submit]');
+  await page.waitForFunction(() =>
+    /entry\.mountPoint/.test(
+      document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+    ),
+  );
+  assert.equal(readFileSync(join(d, 'f.txt'), 'utf8'), 'f');
+});
+
 await check(
   'Restore toast: only the last deletion, gone after 10 s, held while hovered',
   async (page) => {
