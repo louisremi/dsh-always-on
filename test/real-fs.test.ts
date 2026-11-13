@@ -9,8 +9,11 @@
  */
 import assert from 'node:assert/strict';
 import {
+  accessSync,
   chmodSync,
+  constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -22,8 +25,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
+import { inflateRawSync } from 'node:zlib';
 import { Context } from '@deepseek-ai/cordis';
 import { WorkspaceFiles } from '@deepseek-ai/dsh-api-workspace-files';
 import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local';
@@ -31,10 +35,20 @@ import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox';
 import type { DownloadContext, LiveSession, SaveContext } from '../src/context.ts';
 import { handleCreateFile, handleCreateFolder } from '../src/create-route.ts';
 import { handleDownload } from '../src/download-route.ts';
-import { handleDeleteFile, handleRenameFile } from '../src/entry-route.ts';
+import { setMoveCommand } from '../src/entry.ts';
+import {
+  handleDeleteFile,
+  handleDeleteFolder,
+  handleRenameFile,
+  handleRenameFolder,
+  handleRestore,
+} from '../src/entry-route.ts';
 import { canonicalPath, landedInside, mayWrite } from '../src/fence.ts';
+import { handleDownloadFolder, handleFolderSummary } from '../src/folder-route.ts';
 import { undoMkdir } from '../src/paths.ts';
 import { handleSave } from '../src/save-route.ts';
+import { purgeTrash, slotName, slotTime, trashRelation, trashRootFor } from '../src/trash.ts';
+import { walkFolder } from '../src/walk.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
 // sandbox, `outside` a sibling it must not reach. NOT under the OS temp dir:
@@ -62,16 +76,19 @@ interface HostOptions {
   backend?: 'sandbox' | 'local';
   /** Extra directories workspace-write may write under. */
   extraRoots?: string[];
+  /** The session's workspace root; defaults to the fixture workspace. */
+  workspaceRoot?: string;
 }
 
 /** The Harness services the routes consume, built from the real packages. */
 function realHost(mode: Mode = 'workspace-write', options: HostOptions = {}) {
+  const workspaceRoot = options.workspaceRoot ?? workspace;
   const policy = {
     defaultMode: mode,
-    workspaceRoot: workspace,
+    workspaceRoot,
     resolve: ({ session }: { session: LiveSession }) => ({
       mode,
-      workspaceRoot: workspace,
+      workspaceRoot,
       additionalWritableRoots: options.extraRoots,
       sessionId: session.id,
     }),
@@ -85,6 +102,13 @@ function realHost(mode: Mode = 'workspace-write', options: HostOptions = {}) {
     maxFileBytes: 32 << 20,
     maxLines: 5000,
     maxEntries: 2000,
+    search: {
+      maxResults: 512,
+      maxEntries: 100000,
+      graceMs: 3000,
+      timeoutMs: 30000,
+      stderrMaxBytes: 65536,
+    },
   });
   // The real classes are structurally wider than the plugin's own interfaces
   // (branded ids, extra members); the casts only bridge those spellings.
@@ -424,6 +448,11 @@ test('delete.file deletes one regular file inside the sandbox only', async () =>
   const res = await remove(host.save, file);
   assert.equal(res.status, 200);
   assert.ok(!existsSync(file));
+  // Into the trash, not gone: same bytes, a restore token.
+  const body = await res.json();
+  assert.equal(readFileSync(body.trashedPath, 'utf8'), 'bye');
+  assert.ok(body.trashedPath.startsWith(`${join(workspace, '.tmp', 'deleted')}/`));
+  assert.equal(typeof body.restoreToken, 'string');
   assert.equal((await remove(host.save, file)).status, 404);
   assert.equal((await remove(host.save, join(outside, 'secret.txt'))).status, 403);
   assert.equal((await remove(host.save, join(workspace, 'sub'))).status, 403);
@@ -568,5 +597,420 @@ test('Last-Modified is the served file, the one the Harness filesystem resolved'
   assert.equal(
     res.headers.get('content-length'),
     String(statSync(join(outside, 'secret.txt')).size),
+  );
+});
+
+// ───────────────────── folders, trash and restore ─────────────────────
+
+const renameFolder = (ctx: SaveContext, path: string, destination: string) =>
+  entry(handleRenameFolder, ctx, { path, destination });
+const removeFolder = (ctx: SaveContext, path: string) => entry(handleDeleteFolder, ctx, { path });
+const restore = (ctx: SaveContext, restoreToken: unknown, sessionId = 'sess') =>
+  entry(handleRestore, ctx, { sessionId, restoreToken });
+const tree = (root: string) => {
+  mkdirSync(join(root, 'inner', 'deep'), { recursive: true });
+  writeFileSync(join(root, 'a.txt'), 'A');
+  writeFileSync(join(root, 'inner', 'deep', 'b.txt'), 'B');
+};
+
+test('rename.folder renames in place and moves into new parents, contents intact', async () => {
+  const host = realHost();
+  const from = join(workspace, 'f1');
+  tree(from);
+  const res = await renameFolder(host.save, from, 'f2');
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).absolutePath, join(workspace, 'f2'));
+  assert.ok(!existsSync(from));
+  assert.equal(readFileSync(join(workspace, 'f2/inner/deep/b.txt'), 'utf8'), 'B');
+  assert.equal((await renameFolder(host.save, join(workspace, 'f2'), 'p/q/f3')).status, 200);
+  assert.equal(readFileSync(join(workspace, 'p/q/f3/a.txt'), 'utf8'), 'A');
+  assert.equal((await renameFolder(host.save, join(workspace, 'p/q/f3'), 'f3')).status, 200);
+});
+
+test('rename.folder never replaces anything, not even an empty folder', async () => {
+  const host = realHost();
+  const from = join(workspace, 'g1');
+  tree(from);
+  mkdirSync(join(workspace, 'g-empty'));
+  writeFileSync(join(workspace, 'g-file'), 'f');
+  for (const taken of ['g-empty', 'g-file', 'sub', 'escape-dir']) {
+    assert.equal((await renameFolder(host.save, from, taken)).status, 409, taken);
+  }
+  assert.ok(
+    isDir(join(workspace, 'g-empty')) && readdirSync(join(workspace, 'g-empty')).length === 0,
+  );
+  assert.equal(readFileSync(join(from, 'a.txt'), 'utf8'), 'A');
+  // Into itself is refused before moving anything.
+  assert.equal((await renameFolder(host.save, from, 'g1/inner/x')).status, 400);
+  assert.equal((await renameFolder(host.save, from, join(from, 'x'))).status, 400);
+  assert.ok(isDir(join(from, 'inner')) && !existsSync(join(from, 'x')));
+});
+
+test('rename.folder follows the sandbox, refuses files, symlinks and the root', async () => {
+  const host = realHost();
+  const dir = join(workspace, 'h1');
+  tree(dir);
+  assert.equal((await renameFolder(realHost('read-only').save, dir, 'h2')).status, 403);
+  assert.equal((await renameFolder(host.save, dir, join(outside, 'h'))).status, 403);
+  assert.equal((await renameFolder(host.save, dir, 'escape-dir/h')).status, 403);
+  assert.ok(!existsSync(join(outside, 'h')) && isDir(dir));
+  assert.equal((await renameFolder(host.save, outside, join(workspace, 'o'))).status, 403);
+  assert.equal((await renameFolder(host.save, join(workspace, 'escape-dir'), 'e')).status, 403);
+  assert.equal((await renameFolder(host.save, join(dir, 'a.txt'), 'x')).status, 403);
+  assert.equal((await renameFolder(host.save, workspace, join(base, 'ws2'))).status, 403);
+  assert.equal((await renameFolder(host.save, join(workspace, 'nope'), 'x')).status, 404);
+});
+
+test('rename.folder without a GNU mv is a 501 and moves nothing', async () => {
+  const dir = join(workspace, 'nomv');
+  tree(dir);
+  const previous = setMoveCommand(join(base, 'no-such-mv'));
+  try {
+    assert.equal((await renameFolder(realHost().save, dir, 'nomv2')).status, 501);
+  } finally {
+    setMoveCommand(previous);
+  }
+  assert.ok(isDir(dir) && !existsSync(join(workspace, 'nomv2')));
+});
+
+test('delete.folder moves empty and full folders to the trash; restore brings them back', async () => {
+  const host = realHost();
+  const empty = join(workspace, 'k-empty');
+  mkdirSync(empty);
+  const gone = await removeFolder(host.save, empty);
+  assert.equal(gone.status, 200);
+  assert.ok(!existsSync(empty));
+  const full = join(workspace, 'k-full');
+  tree(full);
+  // A symlink inside pointing outside: moved as a link, its target untouched.
+  symlinkSync(join(outside, 'secret.txt'), join(full, 'link'));
+  const res = await removeFolder(host.save, full);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(!existsSync(full));
+  assert.equal(readFileSync(join(body.trashedPath, 'inner/deep/b.txt'), 'utf8'), 'B');
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'secret\n');
+  const back = await restore(host.save, body.restoreToken);
+  assert.equal(back.status, 200);
+  assert.deepEqual(await back.json(), { absolutePath: full, kind: 'folder' });
+  assert.equal(readFileSync(join(full, 'a.txt'), 'utf8'), 'A');
+  assert.ok(!existsSync(dirname(body.trashedPath)), 'the empty slot goes too');
+  // A token is single-use.
+  assert.equal((await restore(host.save, body.restoreToken)).status, 404);
+});
+
+test('restore: tokens are per session, never replace, recreate parents', async () => {
+  const host = realHost();
+  mkdirSync(join(workspace, 'r-parent'));
+  const file = join(workspace, 'r-parent', 'r.txt');
+  writeFileSync(file, 'one');
+  const { restoreToken } = await (await remove(host.save, file)).json();
+  assert.equal((await restore(host.save, restoreToken, 'cold')).status, 404);
+  assert.equal((await restore(host.save, 'made-up')).status, 404);
+  assert.equal((await restore(host.save, 42)).status, 404);
+  // The name is taken again: refused, the deleted file stays in the trash.
+  writeFileSync(file, 'two');
+  assert.equal((await restore(host.save, restoreToken)).status, 409);
+  assert.equal(readFileSync(file, 'utf8'), 'two');
+  rmSync(join(workspace, 'r-parent'), { recursive: true });
+  // The parent folder is gone: recreated.
+  assert.equal((await restore(host.save, restoreToken)).status, 200);
+  assert.equal(readFileSync(file, 'utf8'), 'one');
+  // A session that became read-only cannot restore.
+  const again = await (await remove(host.save, file)).json();
+  assert.equal((await restore(realHost('read-only').save, again.restoreToken)).status, 403);
+  assert.ok(!existsSync(file));
+});
+
+test('delete.folder follows the sandbox and protects the root and the trash', async () => {
+  const host = realHost();
+  const dir = join(workspace, 'l1');
+  tree(dir);
+  assert.equal((await removeFolder(realHost('read-only').save, dir)).status, 403);
+  assert.equal((await removeFolder(host.save, outside)).status, 403);
+  assert.equal((await removeFolder(host.save, join(workspace, 'escape-dir'))).status, 403);
+  assert.ok(existsSync(join(workspace, 'escape-dir')) && existsSync(join(outside, 'secret.txt')));
+  assert.equal((await removeFolder(host.save, join(dir, 'a.txt'))).status, 403);
+  assert.equal((await remove(host.save, dir)).status, 403);
+  assert.equal((await removeFolder(host.save, workspace)).status, 403);
+  // The trash, or a folder holding it, cannot be deleted through the routes.
+  const trashed = (await (await removeFolder(host.save, dir)).json()).trashedPath;
+  assert.equal((await removeFolder(host.save, trashed)).status, 403);
+  assert.equal((await removeFolder(host.save, join(workspace, '.tmp'))).status, 403);
+  assert.equal((await removeFolder(host.save, join(workspace, '.tmp/deleted'))).status, 403);
+  assert.ok(isDir(trashed));
+});
+
+test('a trash that is a symlink is refused: nothing is deleted', async () => {
+  const root = join(base, 'symtrash');
+  mkdirSync(root);
+  mkdirSync(join(outside, 'fake-tmp'));
+  symlinkSync(join(outside, 'fake-tmp'), join(root, '.tmp'));
+  writeFileSync(join(root, 'v.txt'), 'v');
+  const host = realHost('workspace-write', { extraRoots: [root] }).save;
+  assert.equal((await remove(host, join(root, 'v.txt'))).status, 403);
+  assert.equal(readFileSync(join(root, 'v.txt'), 'utf8'), 'v');
+  assert.deepEqual(readdirSync(join(outside, 'fake-tmp')), []);
+});
+
+/**
+ * A real mount point this process may write in: another filesystem than the
+ * fixtures', and the top of that filesystem — which is exactly what makes a
+ * path's `st_dev` differ from its parent's, like a volume mounted inside a
+ * workspace. Nothing can be mounted in CI, but every Linux box has one.
+ */
+const volume = ((): string | undefined => {
+  for (const candidate of ['/dev/shm', '/tmp', '/run', '/var/tmp']) {
+    try {
+      const real = realpathSync(candidate);
+      accessSync(real, constants.W_OK);
+      if (statSync(real).dev === statSync(fixtures).dev) continue;
+      if (statSync(dirname(real)).dev === statSync(real).dev) continue;
+      return real;
+    } catch {
+      /* not there, or not writable */
+    }
+  }
+  return undefined;
+})();
+
+test('a delete on a volume mounted inside the workspace trashes it on that volume, as a rename', {
+  skip: volume === undefined && 'no second filesystem to stand in for a mount',
+}, async () => {
+  const mount = join(volume as string, `.dlf-mount-${process.pid}`);
+  const madeTemp = !existsSync(join(volume as string, '.tmp'));
+  mkdirSync(join(mount, 'dir'), { recursive: true });
+  writeFileSync(join(mount, 'x.txt'), 'x');
+  writeFileSync(join(mount, 'dir', 'y.txt'), 'y');
+  // With `/` as the workspace root, `mount` is a mount inside the workspace.
+  const host = realHost('workspace-write', { workspaceRoot: '/' }).save;
+  const trash = join(volume as string, '.tmp', 'deleted');
+  try {
+    const file = await remove(host, join(mount, 'x.txt'));
+    assert.equal(file.status, 200);
+    const body = await file.json();
+    assert.ok(
+      body.trashedPath.startsWith(`${trash}/`),
+      `trashed onto the volume itself, not copied into the workspace: ${body.trashedPath}`,
+    );
+    assert.equal(readFileSync(body.trashedPath, 'utf8'), 'x');
+    assert.ok(!existsSync(join(mount, 'x.txt')));
+    // Restore is a rename back, onto the same volume.
+    assert.equal((await restore(host, body.restoreToken)).status, 200);
+    assert.equal(readFileSync(join(mount, 'x.txt'), 'utf8'), 'x');
+    // A whole folder of the volume too.
+    const folder = await removeFolder(host, join(mount, 'dir'));
+    assert.equal(folder.status, 200);
+    const trashedFolder = (await folder.json()).trashedPath;
+    assert.ok(trashedFolder.startsWith(`${trash}/`), trashedFolder);
+    assert.equal(readFileSync(join(trashedFolder, 'y.txt'), 'utf8'), 'y');
+    assert.ok(!existsSync(join(mount, 'dir')));
+    // The trash of the volume is protected like the workspace's.
+    assert.equal((await removeFolder(host, trashedFolder)).status, 403);
+    assert.equal((await removeFolder(host, join(volume as string, '.tmp'))).status, 403);
+    // The mount point itself cannot be trashed: it can move nowhere on its
+    // own filesystem, and copying a whole volume is not a delete.
+    const policy = { mode: 'workspace-write', workspaceRoot: '/' };
+    await assert.rejects(trashRootFor(policy, volume as string), { code: 'EBUSY' });
+    assert.equal(await trashRelation(policy, join(volume as string, '.tmp')), 'holds');
+    assert.equal(await trashRelation(policy, trashedFolder), 'inside');
+    assert.equal(await trashRelation(policy, join(mount, 'x.txt')), 'none');
+    assert.ok(existsSync(volume as string), 'the mount point is still there');
+  } finally {
+    rmSync(mount, { recursive: true, force: true });
+    if (madeTemp) rmSync(join(volume as string, '.tmp'), { recursive: true, force: true });
+  }
+});
+
+test('a delete outside every root in danger mode still lands in the workspace trash', {
+  skip: volume === undefined && 'no second filesystem',
+}, async () => {
+  // No mount here: the entry is on another filesystem AND outside the root,
+  // where the plugin has no directory of its own to put a trash in.
+  const mount = join(volume as string, `.dlf-outside-${process.pid}`);
+  mkdirSync(mount);
+  writeFileSync(join(mount, 'z.txt'), 'z');
+  const host = realHost('danger-full-access').save;
+  try {
+    const res = await remove(host, join(mount, 'z.txt'));
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(body.trashedPath.startsWith(`${join(workspace, '.tmp', 'deleted')}/`));
+    assert.equal(readFileSync(body.trashedPath, 'utf8'), 'z');
+  } finally {
+    rmSync(mount, { recursive: true, force: true });
+  }
+});
+
+test('purgeTrash removes old slots only, never following symlinks', async () => {
+  const trash = join(base, 'purge', '.tmp', 'deleted');
+  const now = Date.UTC(2026, 10, 13, 12, 0, 0);
+  const old = slotName(new Date(now - 31 * 86400_000));
+  const young = slotName(new Date(now - 29 * 86400_000));
+  assert.equal(slotTime(old), Math.floor((now - 31 * 86400_000) / 1000) * 1000);
+  assert.equal(slotTime('not-a-slot'), undefined);
+  mkdirSync(join(trash, old, 'dir', 'deep'), { recursive: true });
+  writeFileSync(join(trash, old, 'dir', 'deep', 'f'), 'f');
+  symlinkSync(outside, join(trash, old, 'dir', 'out'));
+  mkdirSync(join(trash, young));
+  mkdirSync(join(trash, '19990101T000000Z-foreign'));
+  const removed = await purgeTrash(trash, now);
+  assert.deepEqual(removed, [old]);
+  assert.deepEqual(readdirSync(trash).sort(), ['19990101T000000Z-foreign', young].sort());
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'secret\n');
+  assert.deepEqual(await purgeTrash(join(base, 'no-trash'), now), []);
+});
+
+// ─────────────────────── folder summary / download ───────────────────────
+
+const getFolder = (handle: typeof handleFolderSummary, path: string, method = 'GET') =>
+  handle(
+    realHost().download,
+    new Request(`http://x/api/folder?path=${encodeURIComponent(path)}`, { method }),
+  );
+
+/** Members of a ZIP read through its central directory: name → bytes (folders: null). */
+function unzip(zip: Buffer): Map<string, Buffer | null> {
+  const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  assert.ok(eocd >= 0, 'end of central directory');
+  const count = zip.readUInt16LE(eocd + 10);
+  let at = zip.readUInt32LE(eocd + 16);
+  const out = new Map<string, Buffer | null>();
+  for (let i = 0; i < count; i++) {
+    assert.equal(zip.readUInt32LE(at), 0x02014b50);
+    const flags = zip.readUInt16LE(at + 8);
+    const method = zip.readUInt16LE(at + 10);
+    const crc = zip.readUInt32LE(at + 16);
+    const compressed = zip.readUInt32LE(at + 20);
+    const size = zip.readUInt32LE(at + 24);
+    const nameLength = zip.readUInt16LE(at + 28);
+    const extra = zip.readUInt16LE(at + 30);
+    const comment = zip.readUInt16LE(at + 32);
+    const offset = zip.readUInt32LE(at + 42);
+    const name = zip.subarray(at + 46, at + 46 + nameLength).toString('utf8');
+    assert.ok(flags & 0x0800, 'UTF-8 names');
+    assert.equal(zip.readUInt32LE(offset), 0x04034b50);
+    const start = offset + 30 + zip.readUInt16LE(offset + 26) + zip.readUInt16LE(offset + 28);
+    if (name.endsWith('/')) {
+      out.set(name, null);
+    } else {
+      const raw = zip.subarray(start, start + compressed);
+      const data = method === 8 ? inflateRawSync(raw) : Buffer.from(raw);
+      assert.equal(data.length, size, `${name} size`);
+      assert.equal(crc32Of(data), crc, `${name} crc`);
+      out.set(name, data);
+    }
+    at += 46 + nameLength + extra + comment;
+  }
+  return out;
+}
+
+function crc32Of(data: Buffer): number {
+  let c = ~0 >>> 0;
+  for (const byte of data) {
+    c ^= byte;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  }
+  return ~c >>> 0;
+}
+
+test('folder.summary counts files, folders and bytes without following symlinks', async () => {
+  const dir = join(workspace, 'sum');
+  tree(dir);
+  symlinkSync(outside, join(dir, 'out'));
+  const res = await getFolder(handleFolderSummary, dir);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    files: 2,
+    folders: 2,
+    bytes: 2,
+    truncated: false,
+    mounts: [],
+    downloadable: true,
+  });
+  assert.equal((await getFolder(handleFolderSummary, join(dir, 'a.txt'))).status, 403);
+  assert.equal((await getFolder(handleFolderSummary, join(workspace, 'nope'))).status, 404);
+  assert.equal((await getFolder(handleFolderSummary, 'rel')).status, 400);
+});
+
+/** A folder with a volume mounted right inside it: `/dev` and its `pts`, on most Linux boxes. */
+const holder = ((): { root: string; mounts: string[] } | undefined => {
+  for (const root of ['/dev', '/run']) {
+    try {
+      const dev = statSync(root).dev;
+      const mounts = readdirSync(root)
+        .filter((n) => {
+          const info = lstatSync(join(root, n));
+          return info.isDirectory() && info.dev !== dev;
+        })
+        .sort();
+      if (mounts.length > 0) return { root, mounts };
+    } catch {
+      /* not there, or not readable */
+    }
+  }
+  return undefined;
+})();
+
+test('a folder walk names the volumes mounted inside it', {
+  skip: holder === undefined && 'no folder with a mount inside it',
+}, async () => {
+  const { root, mounts } = holder as { root: string; mounts: string[] };
+  const walk = await walkFolder(root, { maxEntries: 2000, maxBytes: Number.MAX_SAFE_INTEGER });
+  for (const mount of mounts) assert.ok(walk.mounts.includes(mount), `${mount} is a mount`);
+  // Folders on the same filesystem as their parent are not mounts.
+  const plain = await walkFolder(workspace, { maxEntries: 2000, maxBytes: 1e12 });
+  assert.deepEqual(plain.mounts, []);
+});
+
+test('download.folder streams a valid zip: names, bytes, empty folders, no symlinks', async () => {
+  const dir = join(workspace, 'zipme');
+  tree(dir);
+  mkdirSync(join(dir, 'empty'));
+  writeFileSync(join(dir, 'héllo wörld.txt'), 'ünïcode');
+  const big = Buffer.alloc(3 << 20);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 7919) % 251;
+  writeFileSync(join(dir, 'big.bin'), big);
+  symlinkSync(join(outside, 'secret.txt'), join(dir, 'leak'));
+  const res = await getFolder(handleDownloadFolder as typeof handleFolderSummary, dir);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/zip');
+  assert.match(res.headers.get('content-disposition') ?? '', /filename="zipme\.zip"/);
+  const zip = Buffer.from(await res.arrayBuffer());
+  const members = unzip(zip);
+  assert.equal(members.get('zipme/a.txt')?.toString(), 'A');
+  assert.equal(members.get('zipme/inner/deep/b.txt')?.toString(), 'B');
+  assert.equal(members.get('zipme/héllo wörld.txt')?.toString(), 'ünïcode');
+  assert.ok(members.get('zipme/big.bin')?.equals(big));
+  assert.ok(members.has('zipme/empty/') && members.has('zipme/inner/'));
+  assert.ok(!members.has('zipme/leak'), 'symlinks are left out');
+  assert.match(members.get('zipme/DOWNLOAD-SKIPPED.txt')?.toString() ?? '', /^leak$/m);
+  assert.ok(![...members.values()].some((data) => data?.toString().includes('secret')));
+  const head = await getFolder(handleDownloadFolder as typeof handleFolderSummary, dir, 'HEAD');
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+});
+
+test('download.folder refuses folders over the limits with 413, files with 403', async () => {
+  const dir = join(workspace, 'zipbig');
+  tree(dir);
+  const request = () => new Request(`http://x/api/download.folder?path=${encodeURIComponent(dir)}`);
+  const host = realHost().download;
+  assert.equal(
+    (await handleDownloadFolder(host, request(), { maxEntries: 3, maxBytes: 1e9 })).status,
+    413,
+  );
+  assert.equal(
+    (await handleDownloadFolder(host, request(), { maxEntries: 99, maxBytes: 1 })).status,
+    413,
+  );
+  assert.equal(
+    (await handleDownloadFolder(host, request(), { maxEntries: 4, maxBytes: 2 })).status,
+    200,
+  );
+  assert.equal(
+    (await getFolder(handleDownloadFolder as typeof handleFolderSummary, join(dir, 'a.txt')))
+      .status,
+    403,
   );
 });
