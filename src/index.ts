@@ -24,7 +24,6 @@ import {
   handleRenameFile,
   handleRenameFolder,
   handleRestore,
-  onTrashUsed,
   RENAME_FILE_PATH,
   RENAME_FOLDER_PATH,
   RESTORE_PATH,
@@ -36,8 +35,8 @@ import {
   SUMMARY_PATH,
 } from './folder-route.ts';
 import { registerRoute } from './http.ts';
+import { startPurge } from './purge.ts';
 import { registerSaveRoute } from './save-route.ts';
-import { existingTrashDir, purgeTrash } from './trash.ts';
 
 /** Services the routes need: auth fence, filesystem, session lookups. */
 export const inject = [
@@ -59,44 +58,13 @@ export interface PluginContext {
   workspaceChanges: { summary(sessionId: string, seq: number): ChangeSummary | undefined };
   sandboxPolicy: {
     workspaceRoot: string;
+    additionalWritableRoots?: readonly string[] | undefined;
     defaultMode: string;
     resolve(input: { session: LiveSession }): SandboxPolicy;
   };
   sessions?: { get(sessionId: string): LiveSession | undefined } | undefined;
   get(name: string): SessionPersistence | undefined;
   effect(callback: () => void | (() => void | Promise<void>), label?: string): unknown;
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Purge the trash folders this process knows of: the default workspace's at
- * start, every one a delete used since, again each day.
- */
-function trashPurge(ctx: PluginContext): () => void {
-  const known = new Set<string>();
-  const purge = (dir: string) => {
-    purgeTrash(dir).catch((error) => {
-      console.warn('[dsh-always-on] trash purge failed:', error);
-    });
-  };
-  onTrashUsed((dir) => {
-    known.add(dir);
-    purge(dir);
-  });
-  void existingTrashDir(ctx.sandboxPolicy.workspaceRoot).then((dir) => {
-    if (dir === undefined) return;
-    known.add(dir);
-    purge(dir);
-  });
-  const timer = setInterval(() => {
-    for (const dir of known) purge(dir);
-  }, DAY_MS);
-  timer.unref?.();
-  return () => {
-    clearInterval(timer);
-    onTrashUsed((dir) => purge(dir));
-  };
 }
 
 /**
@@ -110,13 +78,20 @@ function trashPurge(ctx: PluginContext): () => void {
 export function apply(ctx: PluginContext): void {
   ctx.effect(() => registerDownloadRoute(ctx), 'always-on: /api/download.file');
   ctx.effect(() => registerSaveRoute(ctx), 'always-on: /api/save.file');
+  // The purge (src/purge.ts) learns each trash a delete uses; it lives as
+  // long as the plugin, like the routes that report to it.
+  const purge = startPurge(ctx);
+  ctx.effect(() => purge.stop, 'always-on: trash purge');
   const mutations = [
     [CREATE_FILE_PATH, handleCreateFile],
     [CREATE_FOLDER_PATH, handleCreateFolder],
     [RENAME_FILE_PATH, handleRenameFile],
-    [DELETE_FILE_PATH, handleDeleteFile],
+    [DELETE_FILE_PATH, (c: PluginContext, r: Request) => handleDeleteFile(c, r, purge.trashUsed)],
     [RENAME_FOLDER_PATH, handleRenameFolder],
-    [DELETE_FOLDER_PATH, handleDeleteFolder],
+    [
+      DELETE_FOLDER_PATH,
+      (c: PluginContext, r: Request) => handleDeleteFolder(c, r, purge.trashUsed),
+    ],
     [RESTORE_PATH, handleRestore],
   ] as const;
   for (const [path, handle] of mutations) {
@@ -132,5 +107,4 @@ export function apply(ctx: PluginContext): void {
       `always-on: ${path}`,
     );
   }
-  ctx.effect(() => trashPurge(ctx), 'always-on: trash purge');
 }

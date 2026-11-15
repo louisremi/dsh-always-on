@@ -11,17 +11,25 @@ import { Readable } from 'node:stream';
 import type { DownloadContext } from './context.ts';
 import { contentDisposition, text } from './download-route.ts';
 import { failureStatus, json } from './http.ts';
-import { type WalkLimits, walkFolder } from './walk.ts';
+import { walkFolder } from './walk.ts';
 import { type ZipMember, zipStream } from './zip.ts';
 
 export const SUMMARY_PATH = '/api/folder.summary';
 export const DOWNLOAD_FOLDER_PATH = '/api/download.folder';
 
-/** What a folder download may hold; keep in step with FOLDER_LIMITS in src/client.ts. */
+/** What a folder download may hold; src/client.ts and the README repeat it (test/limits.test.ts checks). */
 export const FOLDER_LIMITS = {
   maxEntries: 20_000,
   maxBytes: 2 * 1024 * 1024 * 1024,
 };
+/**
+ * How long a folder download may take. A download that sends nothing for
+ * `stallMs` (the browser stopped reading, or a file read hangs) is ended, so
+ * a dead connection does not keep files open; `totalMs` is a safety net only:
+ * the 2 GiB limit fits in a day at 25 KB/s.
+ */
+export const DOWNLOAD_TIMEOUTS = { stallMs: 5 * 60 * 1000, totalMs: 24 * 60 * 60 * 1000 };
+
 /** How far a summary counts before it says "more than". */
 export const SUMMARY_LIMITS = { maxEntries: 100_000, maxBytes: Number.MAX_SAFE_INTEGER };
 const SUMMARY_DEADLINE_MS = 2000;
@@ -80,6 +88,74 @@ export async function handleFolderSummary(
   }
 }
 
+/**
+ * `chunks` as a response body that ends with an error when the request is
+ * aborted, when no chunk went out for `stallMs`, or after `totalMs` in all.
+ * Ending it returns the generator, which closes the file being read.
+ */
+export function timedBody(
+  chunks: AsyncGenerator<Uint8Array>,
+  signal: AbortSignal,
+  timeouts: { stallMs: number; totalMs: number },
+): ReadableStream<Uint8Array> {
+  let ended = false;
+  let stall: ReturnType<typeof setTimeout> | undefined;
+  let total: ReturnType<typeof setTimeout> | undefined;
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  /** End the body: closed when `error` is undefined, else errored. */
+  const finish = (error?: unknown) => {
+    if (ended) return;
+    ended = true;
+    clearTimeout(stall);
+    clearTimeout(total);
+    signal.removeEventListener('abort', onAbort);
+    if (error === undefined) controller?.close();
+    else {
+      controller?.error(error);
+      void chunks.return(undefined).catch(() => undefined);
+    }
+  };
+  const fail = (message: string) => finish(new Error(message));
+  const onAbort = () => fail('download cancelled');
+  const armStall = () => {
+    clearTimeout(stall);
+    stall = setTimeout(() => fail('download stalled'), timeouts.stallMs);
+    stall.unref?.();
+  };
+  return new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+      total = setTimeout(() => fail('download took too long'), timeouts.totalMs);
+      total.unref?.();
+      armStall();
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort);
+    },
+    async pull(c) {
+      try {
+        const next = await chunks.next();
+        if (ended) return;
+        if (next.done) {
+          finish();
+          return;
+        }
+        // Every chunk that goes out re-arms the stall timer.
+        armStall();
+        c.enqueue(next.value);
+      } catch (error) {
+        finish(error);
+      }
+    },
+    async cancel() {
+      ended = true;
+      clearTimeout(stall);
+      clearTimeout(total);
+      signal.removeEventListener('abort', onAbort);
+      await chunks.return(undefined);
+    },
+  });
+}
+
 /** Open a file for the archive without following a symlink swapped in since the walk. */
 async function openNoFollow(hostPath: string) {
   const handle = await open(hostPath, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -99,13 +175,12 @@ async function openNoFollow(hostPath: string) {
 export async function handleDownloadFolder(
   ctx: DownloadContext,
   request: Request,
-  limits: Pick<WalkLimits, 'maxEntries' | 'maxBytes'> = FOLDER_LIMITS,
 ): Promise<Response> {
   const method = request.method;
   try {
     const folder = await folderOf(ctx, request);
     if (folder instanceof Response) return folder;
-    const walk = await walkFolder(folder, { ...limits, signal: request.signal });
+    const walk = await walkFolder(folder, { ...FOLDER_LIMITS, signal: request.signal });
     request.signal.throwIfAborted();
     if (walk.truncated) return text(413, 'folder too large to download', method);
     const name = basename(folder) || 'folder';
@@ -141,22 +216,7 @@ export async function handleDownloadFolder(
     const chunks = zipStream(members(), (member) => {
       skipped.push(member.slice(name.length + 1));
     });
-    const body = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          if (request.signal.aborted) throw request.signal.reason;
-          const next = await chunks.next();
-          if (next.done) controller.close();
-          else controller.enqueue(next.value);
-        } catch (error) {
-          controller.error(error);
-        }
-      },
-      async cancel() {
-        await chunks.return(undefined);
-      },
-    });
-    return new Response(body, { headers });
+    return new Response(timedBody(chunks, request.signal, DOWNLOAD_TIMEOUTS), { headers });
   } catch (error) {
     if (request.signal.aborted) return text(499, 'cancelled', method);
     return text(failureStatus(error), 'folder unavailable', method);

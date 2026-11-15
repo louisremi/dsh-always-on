@@ -4,16 +4,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { test } from 'node:test';
-import * as zlib from 'node:zlib';
-import { crc32, crc32Fallback, type ZipMember, zipStream } from '../src/zip.ts';
+import { crc32, type ZipMember, zipStream } from '../src/zip.ts';
 
-test('the CRC-32 fallback matches the native one', () => {
+test('crc32 is the IEEE CRC-32 and continues across chunks', () => {
   const data = Buffer.from('The quick brown fox jumps over the lazy dog');
-  assert.equal(crc32Fallback(data), 0x414fa339);
-  assert.equal(crc32Fallback(data.subarray(10), crc32Fallback(data.subarray(0, 10))), 0x414fa339);
   assert.equal(crc32(data), 0x414fa339);
-  const native = (zlib as { crc32?: (d: Uint8Array) => number }).crc32;
-  if (native) assert.equal(crc32Fallback(Buffer.alloc(1000, 7)), native(Buffer.alloc(1000, 7)));
+  assert.equal(crc32(data.subarray(10), crc32(data.subarray(0, 10))), 0x414fa339);
 });
 
 test('a member that cannot be opened is skipped, the archive stays valid', async () => {

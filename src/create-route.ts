@@ -88,16 +88,16 @@ export function handleCreateFolder(ctx: SaveContext, request: Request): Promise<
     await assertWritable(policy, hostPath);
     signal.throwIfAborted();
     const parent = dirname(hostPath);
-    const first = await mkdir(parent, { recursive: true });
+    const firstCreated = await mkdir(parent, { recursive: true });
     try {
       // Non-recursive for the final name: EEXIST for anything already there.
       await mkdir(hostPath);
     } catch (error) {
-      await undoMkdir(parent, first);
+      await undoMkdir(parent, firstCreated);
       throw error;
     }
     if (!(await landedInside(policy, hostPath))) {
-      await undoMkdir(hostPath, first ?? hostPath);
+      await undoMkdir(hostPath, firstCreated ?? hostPath);
       throw new FenceError(`"${hostPath}" landed outside the writable roots`);
     }
     return json(201, { absolutePath: hostPath });

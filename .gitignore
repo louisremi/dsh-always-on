@@ -2,6 +2,7 @@ node_modules
 dist
 *.tgz
 tmp/
+.tmp/
 test/.fixtures/
 
 # Local-only agent skills (Matt Pocock's skills, installed from

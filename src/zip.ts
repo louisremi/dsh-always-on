@@ -8,12 +8,13 @@
  */
 import { pipeline, type Readable, Transform } from 'node:stream';
 import * as zlib from 'node:zlib';
+import type { EntryKind } from './paths.ts';
 
 /** One archive member: a folder (no content) or a file whose bytes `open()` streams. */
 export interface ZipMember {
   /** `/`-separated path inside the archive; folders without the trailing `/`. */
   name: string;
-  type: 'file' | 'folder';
+  type: EntryKind;
   mtime: Date;
   /** Unix permission bits (e.g. 0o644); kept in the external attributes. */
   mode?: number | undefined;
@@ -21,28 +22,9 @@ export interface ZipMember {
   open?: () => Promise<Readable>;
 }
 
-let crcTable: Uint32Array | undefined;
-
-/** CRC-32 (IEEE), continuing from `crc`. Node's `zlib.crc32` when present (≥ 20.15/22.2). */
+/** CRC-32 (IEEE), continuing from `crc`: Node's `zlib.crc32` (Node ≥ 20.15; DSH needs ≥ 24.9). */
 export function crc32(data: Uint8Array, crc = 0): number {
-  const native = (zlib as { crc32?: (data: Uint8Array, value?: number) => number }).crc32;
-  if (typeof native === 'function') return native(data, crc);
-  return crc32Fallback(data, crc);
-}
-
-/** Table-driven CRC-32 for Nodes without `zlib.crc32`. */
-export function crc32Fallback(data: Uint8Array, crc = 0): number {
-  if (crcTable === undefined) {
-    crcTable = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) {
-      let c = n;
-      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-      crcTable[n] = c >>> 0;
-    }
-  }
-  let c = ~crc >>> 0;
-  for (const byte of data) c = (crcTable[(c ^ byte) & 0xff] as number) ^ (c >>> 8);
-  return ~c >>> 0;
+  return zlib.crc32(data, crc);
 }
 
 /** MS-DOS date and time fields (local time, 2-second precision, from 1980). */
@@ -58,7 +40,8 @@ const UTF8 = 0x0800;
 const DESCRIPTOR = 0x0008;
 const MAX32 = 0xffffffff;
 
-interface Written {
+/** What the central directory repeats about one member once it is written. */
+interface ZipRecord {
   name: Uint8Array;
   flags: number;
   method: number;
@@ -71,44 +54,44 @@ interface Written {
   offset: number;
 }
 
-function localHeader(w: Written): Uint8Array {
+function localHeader(record: ZipRecord): Uint8Array {
   const b = Buffer.alloc(30);
   b.writeUInt32LE(0x04034b50, 0);
   b.writeUInt16LE(20, 4);
-  b.writeUInt16LE(w.flags, 6);
-  b.writeUInt16LE(w.method, 8);
-  b.writeUInt16LE(w.time, 10);
-  b.writeUInt16LE(w.date, 12);
+  b.writeUInt16LE(record.flags, 6);
+  b.writeUInt16LE(record.method, 8);
+  b.writeUInt16LE(record.time, 10);
+  b.writeUInt16LE(record.date, 12);
   // CRC and sizes: 0 here, in the data descriptor for streamed files.
-  b.writeUInt16LE(w.name.length, 26);
-  return Buffer.concat([b, w.name]);
+  b.writeUInt16LE(record.name.length, 26);
+  return Buffer.concat([b, record.name]);
 }
 
-function dataDescriptor(w: Written): Uint8Array {
+function dataDescriptor(record: ZipRecord): Uint8Array {
   const b = Buffer.alloc(16);
   b.writeUInt32LE(0x08074b50, 0);
-  b.writeUInt32LE(w.crc, 4);
-  b.writeUInt32LE(w.compressed, 8);
-  b.writeUInt32LE(w.size, 12);
+  b.writeUInt32LE(record.crc, 4);
+  b.writeUInt32LE(record.compressed, 8);
+  b.writeUInt32LE(record.size, 12);
   return b;
 }
 
-function centralHeader(w: Written): Uint8Array {
+function centralHeader(record: ZipRecord): Uint8Array {
   const b = Buffer.alloc(46);
   b.writeUInt32LE(0x02014b50, 0);
   b.writeUInt16LE((3 << 8) | 20, 4); // made by: Unix, ZIP 2.0
   b.writeUInt16LE(20, 6);
-  b.writeUInt16LE(w.flags, 8);
-  b.writeUInt16LE(w.method, 10);
-  b.writeUInt16LE(w.time, 12);
-  b.writeUInt16LE(w.date, 14);
-  b.writeUInt32LE(w.crc, 16);
-  b.writeUInt32LE(w.compressed, 20);
-  b.writeUInt32LE(w.size, 24);
-  b.writeUInt16LE(w.name.length, 28);
-  b.writeUInt32LE(w.external >>> 0, 38);
-  b.writeUInt32LE(w.offset, 42);
-  return Buffer.concat([b, w.name]);
+  b.writeUInt16LE(record.flags, 8);
+  b.writeUInt16LE(record.method, 10);
+  b.writeUInt16LE(record.time, 12);
+  b.writeUInt16LE(record.date, 14);
+  b.writeUInt32LE(record.crc, 16);
+  b.writeUInt32LE(record.compressed, 20);
+  b.writeUInt32LE(record.size, 24);
+  b.writeUInt16LE(record.name.length, 28);
+  b.writeUInt32LE(record.external >>> 0, 38);
+  b.writeUInt32LE(record.offset, 42);
+  return Buffer.concat([b, record.name]);
 }
 
 function endOfCentralDirectory(count: number, size: number, offset: number): Uint8Array {
@@ -142,7 +125,7 @@ export async function* zipStream(
   members: AsyncIterable<ZipMember> | Iterable<ZipMember>,
   skip: (name: string, error: unknown) => void = () => undefined,
 ): AsyncGenerator<Uint8Array> {
-  const written: Written[] = [];
+  const written: ZipRecord[] = [];
   let offset = 0;
   const emit = (chunk: Uint8Array) => {
     offset += chunk.length;
@@ -163,7 +146,7 @@ export async function* zipStream(
       }
     }
     const mode = member.mode ?? (folder ? 0o755 : 0o644);
-    const w: Written = {
+    const record: ZipRecord = {
       name: Buffer.from(folder ? `${member.name}/` : member.name, 'utf8'),
       flags: folder ? UTF8 : UTF8 | DESCRIPTOR,
       method: folder ? 0 : 8,
@@ -174,21 +157,21 @@ export async function* zipStream(
       external: (((folder ? 0o040000 : 0o100000) | (mode & 0o7777)) << 16) | (folder ? 0x10 : 0),
       offset,
     };
-    yield emit(localHeader(w));
+    yield emit(localHeader(record));
     if (source !== undefined) {
       const counts = { crc: 0, size: 0 };
       for await (const chunk of deflated(source, counts)) {
-        w.compressed += chunk.length;
+        record.compressed += chunk.length;
         yield emit(chunk);
       }
       if (counts.size > MAX32) throw new Error('file too large for ZIP32');
-      w.crc = counts.crc;
-      w.size = counts.size;
-      yield emit(dataDescriptor(w));
+      record.crc = counts.crc;
+      record.size = counts.size;
+      yield emit(dataDescriptor(record));
     }
-    written.push(w);
+    written.push(record);
   }
   const start = offset;
-  for (const w of written) yield emit(centralHeader(w));
+  for (const record of written) yield emit(centralHeader(record));
   yield emit(endOfCentralDirectory(written.length, offset - start, start));
 }

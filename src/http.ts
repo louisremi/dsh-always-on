@@ -4,6 +4,7 @@
  * connection with the plugin's lifetime handling.
  */
 import type { ConnectionService } from './context.ts';
+import { errorCode } from './errors.ts';
 
 /** A JSON answer that is never cached nor sniffed. */
 export function json(status: number, body: unknown): Response {
@@ -108,7 +109,7 @@ export function failureStatus(error: unknown): number {
  * Node's own codes first, then {@link failureStatus}.
  */
 export function mutationStatus(error: unknown): number {
-  const code = (error as { code?: string }).code;
+  const code = errorCode(error);
   if (code === 'EEXIST') return 409;
   if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return 403;
   return failureStatus(error);

@@ -12,20 +12,32 @@ import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { copyFile, link, lstat, unlink } from 'node:fs/promises';
 import type { SandboxPolicy } from './context.ts';
+import { codedError, errorCode } from './errors.ts';
 import { FenceError, landedInside } from './fence.ts';
+import type { EntryKind } from './paths.ts';
 
-/** A file or folder as checked: path, policy and identity. */
-export interface Entry {
-  kind: 'file' | 'folder';
-  hostPath: string;
-  policy: SandboxPolicy;
+/** Which file or folder a path named when it was checked: `st_dev` + `st_ino`. */
+export interface Identity {
   dev: number;
   ino: number;
 }
 
-/** An error carrying a Node-style code, which mutationStatus maps to a status. */
-export function codedError(message: string, code: string): Error {
-  return Object.assign(new Error(message), { code });
+/** The identity of what `lstat` returned. */
+export function identityOf(info: Identity): Identity {
+  return { dev: info.dev, ino: info.ino };
+}
+
+/** Whether two identities name the same file or folder. */
+export function sameEntry(a: Identity, b: Identity): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+/** A file or folder as checked: path, policy and identity. */
+export interface Entry {
+  kind: EntryKind;
+  hostPath: string;
+  policy: SandboxPolicy;
+  identity: Identity;
 }
 
 /**
@@ -35,11 +47,7 @@ export function codedError(message: string, code: string): Error {
  */
 export async function assertUnchanged(entry: Entry): Promise<void> {
   const now = await lstat(entry.hostPath);
-  if (
-    now.dev !== entry.dev ||
-    now.ino !== entry.ino ||
-    !(await landedInside(entry.policy, entry.hostPath))
-  )
+  if (!sameEntry(now, entry.identity) || !(await landedInside(entry.policy, entry.hostPath)))
     throw new FenceError(`"${entry.hostPath}" is no longer the entry that was checked`);
 }
 
@@ -48,7 +56,7 @@ async function exists(path: string): Promise<boolean> {
     await lstat(path);
     return true;
   } catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') return false;
+    if (errorCode(error) === 'ENOENT') return false;
     throw error;
   }
 }
@@ -61,11 +69,11 @@ async function exists(path: string): Promise<boolean> {
  * longer the checked file, or the old name cannot be removed, the new name is
  * removed again and the error is thrown.
  */
-export async function moveFileNoReplace(from: Entry, to: string): Promise<void> {
+async function moveFileNoReplace(from: Entry, to: string): Promise<void> {
   try {
     await link(from.hostPath, to);
   } catch (error) {
-    const code = (error as { code?: string }).code;
+    const code = errorCode(error);
     // Different filesystem, or one without hard links: exclusive copy instead.
     if (code !== 'EXDEV' && code !== 'EPERM' && code !== 'ENOTSUP') throw error;
     await copyFile(from.hostPath, to, constants.COPYFILE_EXCL);
@@ -81,15 +89,8 @@ export async function moveFileNoReplace(from: Entry, to: string): Promise<void> 
   }
 }
 
-/** The command folder moves spawn; tests point it elsewhere (setMoveCommand). */
-let moveCommand = 'mv';
-
-/** Override the `mv` binary (tests: a missing one). @returns the previous one. */
-export function setMoveCommand(command: string): string {
-  const previous = moveCommand;
-  moveCommand = command;
-  return previous;
-}
+/** The command folder moves spawn, looked up on the Host's `PATH`. */
+const MOVE_COMMAND = 'mv';
 
 interface ExecFailure {
   code?: unknown;
@@ -111,7 +112,7 @@ interface ExecFailure {
 function runMove(from: string, to: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
-      moveCommand,
+      MOVE_COMMAND,
       ['--no-copy', '--no-clobber', '-T', '--', from, to],
       { timeout: 30_000, env: { ...process.env, LC_ALL: 'C' } },
       (error, _stdout, stderr) => {
@@ -122,9 +123,11 @@ function runMove(from: string, to: string): Promise<string> {
         const failure = error as ExecFailure;
         const message = String(failure.stderr ?? stderr ?? '').trim() || error.message;
         if (failure.code === 'ENOENT')
-          reject(codedError(`"${moveCommand}" is not available on this Host`, 'ENOSYS'));
+          reject(codedError(`"${MOVE_COMMAND}" is not available on this Host`, 'ENOSYS'));
         else if (/unrecognized option|invalid option|unknown option/i.test(message))
-          reject(codedError(`"${moveCommand}" lacks --no-copy/--no-clobber: ${message}`, 'ENOSYS'));
+          reject(
+            codedError(`"${MOVE_COMMAND}" lacks --no-copy/--no-clobber: ${message}`, 'ENOSYS'),
+          );
         // coreutils 9.2–9.4 exit 1 when -n skips (9.5+ exit 0, see moveDirNoReplace).
         else if (/not replacing|file exists/i.test(message)) reject(codedError(message, 'EEXIST'));
         else if (/cross-device/i.test(message)) reject(codedError(message, 'EXDEV'));
@@ -145,13 +148,13 @@ function runMove(from: string, to: string): Promise<string> {
  * it is moved back and the error is thrown. Refused (code EXDEV) across
  * filesystems rather than copied, which could leave half a tree.
  */
-export async function moveDirNoReplace(from: Entry, to: string): Promise<void> {
+async function moveDirNoReplace(from: Entry, to: string): Promise<void> {
   await assertUnchanged(from);
   const stderr = await runMove(from.hostPath, to);
   if (/not replacing/i.test(stderr) || (await exists(from.hostPath)))
     throw codedError(`"${to}" already exists`, 'EEXIST');
   const moved = await lstat(to);
-  const same = moved.dev === from.dev && moved.ino === from.ino;
+  const same = sameEntry(moved, from.identity);
   if (!same || !(await landedInside(from.policy, to))) {
     await runMove(to, from.hostPath).catch((error) => {
       console.error(`[dsh-always-on] could not move "${to}" back to "${from.hostPath}":`, error);

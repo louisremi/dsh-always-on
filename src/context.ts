@@ -104,10 +104,15 @@ export interface LiveSession {
   id: string;
 }
 
+/** A stored session as `sessionPersistence` describes it; only its workspace is used. */
+export interface StoredSession {
+  header?: { cwd?: string | undefined } | undefined;
+}
+
 export interface SessionPersistence {
-  stat(
-    sessionId: string,
-  ): Promise<{ header?: { cwd?: string | undefined } | undefined } | undefined>;
+  stat(sessionId: string): Promise<StoredSession | undefined>;
+  /** Every stored session (the 30-day trash purge visits their workspaces). */
+  list?(): Promise<readonly StoredSession[]>;
 }
 
 export interface DownloadContext {

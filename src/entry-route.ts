@@ -13,18 +13,13 @@
  *    /api/restore.entry with the token the delete answered.
  */
 import { lstat, mkdir } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { SandboxPolicy, SaveContext } from './context.ts';
-import {
-  assertUnchanged,
-  codedError,
-  type Entry,
-  moveDirNoReplace,
-  moveFileNoReplace,
-} from './entry.ts';
+import { assertUnchanged, type Entry, identityOf, moveNoReplace } from './entry.ts';
+import { codedError, errorCode } from './errors.ts';
 import { assertWritable, canonicalPath, holdsWritableRoot } from './fence.ts';
 import { failWith, handlePost, json, jsonObject, mutationStatus } from './http.ts';
-import { nameSegments, undoMkdir } from './paths.ts';
+import { type EntryKind, isUnder, nameSegments, undoMkdir } from './paths.ts';
 import { policyFor } from './session-policy.ts';
 import { forgetRestore, moveToTrash, purgeTrash, restoreItem, trashRelation } from './trash.ts';
 
@@ -46,29 +41,31 @@ const fail = failWith(
   'failed',
 );
 
-/** {@link mutationStatus}, plus the codes only moves raise. */
-function entryStatus(error: unknown): number {
-  const code = (error as { code?: string }).code;
-  if (code === 'EXDEV') return 422;
-  if (code === 'ENOSYS') return 501;
-  if (code === 'EINVAL') return 400;
-  if (code === 'ENOTEMPTY') return 409;
-  if (code === 'EBUSY') return 422;
-  return mutationStatus(error);
-}
+/**
+ * The codes only moves raise: their status, and the message the client
+ * matches on (src/client.ts, entryErrorKey) when the status alone is
+ * ambiguous. Every other error goes through {@link mutationStatus}.
+ */
+const MOVE_ERRORS: Record<string, { status: number; message?: string }> = {
+  EXDEV: {
+    status: 422,
+    message: 'on another filesystem: it cannot be moved there or to the trash',
+  },
+  EBUSY: { status: 422, message: 'a mount point cannot be moved to the trash' },
+  ENOSYS: { status: 501, message: 'moving folders needs GNU coreutils mv on the Host' },
+  EINVAL: { status: 400 },
+  ENOTEMPTY: { status: 409 },
+};
 
-/** Answer like handlePost, but with a message for the move-specific errors. */
+/** Answer like handlePost, with {@link MOVE_ERRORS} for the move-specific codes. */
 function handleEntry(request: Request, run: () => Promise<Response>): Promise<Response> {
-  return handlePost(request, fail, entryStatus, async () => {
+  return handlePost(request, fail, mutationStatus, async () => {
     try {
       return await run();
     } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code === 'EXDEV')
-        return fail(422, 'on another filesystem: it cannot be moved there or to the trash');
-      if (code === 'ENOSYS') return fail(501, 'moving folders needs GNU coreutils mv on the Host');
-      if (code === 'EBUSY') return fail(422, 'a mount point cannot be moved to the trash');
-      throw error;
+      const known = MOVE_ERRORS[errorCode(error) ?? ''];
+      if (known === undefined || request.signal.aborted) throw error;
+      return fail(known.status, known.message);
     }
   });
 }
@@ -100,7 +97,7 @@ async function parseEntry(request: Request): Promise<EntryInput | Response> {
 async function writableEntry(
   ctx: SaveContext,
   input: EntryInput,
-  kind: Entry['kind'],
+  kind: EntryKind,
   signal: AbortSignal,
 ): Promise<Entry | Response> {
   const policy = await policyFor(ctx, input.sessionId, signal);
@@ -113,7 +110,7 @@ async function writableEntry(
     return fail(403, kind === 'file' ? 'not a regular file' : 'not a folder');
   if (kind === 'folder' && (await holdsWritableRoot(policy, input.path)))
     return fail(403, 'this folder holds a writable root of the session');
-  return { kind, hostPath: input.path, policy, dev: info.dev, ino: info.ino };
+  return { kind, hostPath: input.path, policy, identity: identityOf(info) };
 }
 
 /**
@@ -130,17 +127,11 @@ function destinationOf(source: string, destination: unknown): string | undefined
   return segments === undefined ? undefined : join(dirname(source), ...segments);
 }
 
-/** Whether `inner` is `outer` or inside it. */
-function within(inner: string, outer: string): boolean {
-  const rel = relative(outer, inner);
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
-
 /**
  * Rename one file or folder (see the two routes). Missing destination folders
  * are created, and removed again when the move fails.
  */
-function handleRename(ctx: SaveContext, request: Request, kind: Entry['kind']) {
+function handleRename(ctx: SaveContext, request: Request, kind: EntryKind) {
   return handleEntry(request, async () => {
     const input = await parseEntry(request);
     if (input instanceof Response) return input;
@@ -154,18 +145,17 @@ function handleRename(ctx: SaveContext, request: Request, kind: Entry['kind']) {
       return fail(422, 'path has no verified Host path');
     await assertWritable(source.policy, destination);
     if (kind === 'folder') {
-      if (within(await canonicalPath(destination), await canonicalPath(source.hostPath)))
+      if (isUnder(await canonicalPath(destination), await canonicalPath(source.hostPath)))
         return fail(400, 'a folder cannot be moved into itself');
     }
     signal.throwIfAborted();
     const parent = dirname(destination);
-    const first = await mkdir(parent, { recursive: true });
+    const firstCreated = await mkdir(parent, { recursive: true });
     try {
-      if (kind === 'file') await moveFileNoReplace(source, destination);
-      else await moveDirNoReplace(source, destination);
+      await moveNoReplace(source, destination);
     } catch (error) {
       // Nothing left behind: the folders this rename created go again.
-      await undoMkdir(parent, first);
+      await undoMkdir(parent, firstCreated);
       throw error;
     }
     return json(200, { absolutePath: destination });
@@ -194,17 +184,20 @@ export function handleRenameFolder(ctx: SaveContext, request: Request): Promise<
 /** Called with each trash folder a delete used, so it can be purged and remembered. */
 export type TrashObserver = (trashDir: string) => void;
 
-let trashObserver: TrashObserver = (trashDir) => {
-  void purgeTrash(trashDir);
+/** Without a purge service (src/purge.ts), a delete still purges the trash it used. */
+const purgeOnly: TrashObserver = (trashDir) => {
+  purgeTrash(trashDir).catch((error) => {
+    console.warn('[dsh-always-on] trash purge failed:', error);
+  });
 };
 
-/** Replace what happens after a delete used a trash folder (index.ts: purge + remember). */
-export function onTrashUsed(observer: TrashObserver): void {
-  trashObserver = observer;
-}
-
 /** Delete one file or folder: move it to its root's trash. */
-function handleDelete(ctx: SaveContext, request: Request, kind: Entry['kind']) {
+function handleDelete(
+  ctx: SaveContext,
+  request: Request,
+  kind: EntryKind,
+  trashUsed: TrashObserver,
+) {
   return handleEntry(request, async () => {
     const input = await parseEntry(request);
     if (input instanceof Response) return input;
@@ -221,7 +214,7 @@ function handleDelete(ctx: SaveContext, request: Request, kind: Entry['kind']) {
       );
     signal.throwIfAborted();
     const trashed = await moveToTrash(target, input.sessionId);
-    trashObserver(trashed.trashDir);
+    trashUsed(trashed.trashDir);
     return json(200, {
       absolutePath: target.hostPath,
       trashedPath: trashed.trashedPath,
@@ -234,8 +227,12 @@ function handleDelete(ctx: SaveContext, request: Request, kind: Entry['kind']) {
  * Handle POST /api/delete.file `{ sessionId, path }`: move one regular file
  * to the trash. Answers `200 { absolutePath, trashedPath, restoreToken }`.
  */
-export function handleDeleteFile(ctx: SaveContext, request: Request): Promise<Response> {
-  return handleDelete(ctx, request, 'file');
+export function handleDeleteFile(
+  ctx: SaveContext,
+  request: Request,
+  trashUsed: TrashObserver = purgeOnly,
+): Promise<Response> {
+  return handleDelete(ctx, request, 'file', trashUsed);
 }
 
 /**
@@ -243,8 +240,12 @@ export function handleDeleteFile(ctx: SaveContext, request: Request): Promise<Re
  * or not, to the trash. Same answer as delete.file; 422 when the folder is on
  * another filesystem than its trash (a mount), where nothing is deleted.
  */
-export function handleDeleteFolder(ctx: SaveContext, request: Request): Promise<Response> {
-  return handleDelete(ctx, request, 'folder');
+export function handleDeleteFolder(
+  ctx: SaveContext,
+  request: Request,
+  trashUsed: TrashObserver = purgeOnly,
+): Promise<Response> {
+  return handleDelete(ctx, request, 'folder', trashUsed);
 }
 
 /**
@@ -271,13 +272,12 @@ export function handleRestore(ctx: SaveContext, request: Request): Promise<Respo
       kind: item.kind,
       hostPath: item.trashedPath,
       policy,
-      dev: item.dev,
-      ino: item.ino,
+      identity: item.identity,
     };
     try {
       await assertUnchanged(trashed);
     } catch (error) {
-      if ((error as { code?: string }).code === 'ENOENT') {
+      if (errorCode(error) === 'ENOENT') {
         forgetRestore(item.token);
         return fail(404, 'no longer in the trash');
       }
@@ -285,13 +285,12 @@ export function handleRestore(ctx: SaveContext, request: Request): Promise<Respo
     }
     signal.throwIfAborted();
     const parent = dirname(item.originalPath);
-    const first = await mkdir(parent, { recursive: true });
+    const firstCreated = await mkdir(parent, { recursive: true });
     try {
-      if (item.kind === 'file') await moveFileNoReplace(trashed, item.originalPath);
-      else await moveDirNoReplace(trashed, item.originalPath);
+      await moveNoReplace(trashed, item.originalPath);
     } catch (error) {
-      await undoMkdir(parent, first);
-      if ((error as { code?: string }).code === 'EEXIST')
+      await undoMkdir(parent, firstCreated);
+      if (errorCode(error) === 'EEXIST')
         throw codedError(`"${item.originalPath}" exists again`, 'EEXIST');
       throw error;
     }

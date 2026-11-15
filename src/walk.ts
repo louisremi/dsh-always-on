@@ -5,16 +5,18 @@
  */
 import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { EntryKind } from './paths.ts';
 
 /** One entry under the walked folder; `path` is relative, `/`-separated. */
 export interface WalkEntry {
-  type: 'file' | 'folder';
+  type: EntryKind;
   path: string;
   hostPath: string;
   size: number;
   mtime: Date;
 }
 
+/** When {@link walkFolder} stops early, with `truncated: true`. */
 export interface WalkLimits {
   /** Stop after this many entries (files + folders). */
   maxEntries: number;
@@ -24,6 +26,7 @@ export interface WalkLimits {
   signal?: AbortSignal | undefined;
 }
 
+/** What {@link walkFolder} found: the entries in name order, and what it left out. */
 export interface Walk {
   entries: WalkEntry[];
   files: number;

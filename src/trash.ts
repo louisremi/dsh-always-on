@@ -16,11 +16,12 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { SandboxPolicy } from './context.ts';
-import { codedError, type Entry, moveNoReplace } from './entry.ts';
+import { type Entry, type Identity, identityOf, moveNoReplace } from './entry.ts';
+import { codedError, errorCode } from './errors.ts';
 import { FenceError } from './fence.ts';
-import { undoMkdir } from './paths.ts';
+import { type EntryKind, isUnder, undoMkdir } from './paths.ts';
 
 /** How long trashed entries are kept before the purge removes them. */
 export const TRASH_DAYS = 30;
@@ -32,11 +33,6 @@ export const TRASH_DIR = join('.tmp', 'deleted');
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** `<YYYYMMDD>T<HHMMSS>Z-<8 hex>`: the only names the purge ever removes. */
 const SLOT = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-[0-9a-f]{8}$/;
-
-function isUnder(path: string, root: string): boolean {
-  const rel = relative(root, path);
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
 
 /** A slot name for `now`, unique enough for two deletes in one second. */
 export function slotName(now: Date): string {
@@ -119,7 +115,7 @@ export async function trashDirOf(root: string): Promise<string> {
     try {
       await mkdir(part);
     } catch (error) {
-      if ((error as { code?: string }).code !== 'EEXIST') throw error;
+      if (errorCode(error) !== 'EEXIST') throw error;
     }
     const info = await lstat(part);
     if (!info.isDirectory())
@@ -128,14 +124,19 @@ export async function trashDirOf(root: string): Promise<string> {
   return dir;
 }
 
-/** What a restore token remembers; never sent to the client. */
-interface Restorable {
-  sessionId: string;
-  kind: Entry['kind'];
+/** A restore token's entry: where it was, where it is in the trash, which it is. */
+export interface RestoreItem {
+  token: string;
+  kind: EntryKind;
   originalPath: string;
   trashedPath: string;
-  dev: number;
-  ino: number;
+  identity: Identity;
+}
+
+/** What the Host keeps per token; never sent to the client. */
+interface Restorable {
+  item: RestoreItem;
+  sessionId: string;
   expires: number;
 }
 
@@ -194,25 +195,17 @@ export async function moveToTrash(
   sweep(now.getTime());
   const restoreToken = randomUUID();
   restorable.set(restoreToken, {
+    item: {
+      token: restoreToken,
+      kind: entry.kind,
+      originalPath: entry.hostPath,
+      trashedPath,
+      identity: identityOf(moved),
+    },
     sessionId,
-    kind: entry.kind,
-    originalPath: entry.hostPath,
-    trashedPath,
-    dev: moved.dev,
-    ino: moved.ino,
     expires: now.getTime() + RESTORE_TTL_MS,
   });
   return { trashedPath, restoreToken, trashDir };
-}
-
-/** A restore token's entry, still in the trash and unchanged. */
-export interface RestoreItem {
-  token: string;
-  kind: Entry['kind'];
-  originalPath: string;
-  trashedPath: string;
-  dev: number;
-  ino: number;
 }
 
 /** The entry a token restores, or undefined (unknown, expired, other session). */
@@ -223,10 +216,8 @@ export function restoreItem(
 ): RestoreItem | undefined {
   sweep(now);
   if (typeof token !== 'string') return undefined;
-  const item = restorable.get(token);
-  if (item === undefined || item.sessionId !== sessionId) return undefined;
-  const { kind, originalPath, trashedPath, dev, ino } = item;
-  return { token, kind, originalPath, trashedPath, dev, ino };
+  const kept = restorable.get(token);
+  return kept?.sessionId === sessionId ? kept.item : undefined;
 }
 
 /** Forget a token once its entry is restored. */

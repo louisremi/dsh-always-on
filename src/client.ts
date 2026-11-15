@@ -645,10 +645,7 @@ span:has(+[data-presented-files-row]){display:none}
      * (the Host says so in `error`), else the folder a create targets or the
      * file a rename/delete acts on.
      */
-    function mutationErrorKey(
-      response: { status: number; body: any },
-      target: 'folder' | 'file',
-    ): string {
+    function mutationErrorKey(response: { status: number; body: any }, target: EntryKind): string {
       const { status, body } = response;
       if (status === 409) return 'create.exists';
       if (status === 404) {
@@ -962,14 +959,17 @@ span:has(+[data-presented-files-row]){display:none}
       return `${cwd.replace(/\/+$/, '')}/${path.replace(/^(?:\.?\/)+/, '')}`;
     }
 
-    /** What a folder download may hold; keep in step with FOLDER_LIMITS in src/folder-route.ts. */
+    /** What a folder download may hold: FOLDER_LIMITS in src/folder-route.ts, as shown (test/limits.test.ts checks they match). */
     const FOLDER_LIMITS = { files: '20,000', size: '2 GiB' };
     /** How long the Restore button stays after a delete. */
     const RESTORE_MS = 10_000;
 
+    /** What a menu action acts on; src/paths.ts has the Host's copy. */
+    type EntryKind = 'file' | 'folder';
+
     /** A file or folder a menu action acts on. */
     interface EntryTarget {
-      kind: 'file' | 'folder';
+      kind: EntryKind;
       sessionId: string;
       absolutePath: string;
       cwd?: string | undefined;
@@ -980,7 +980,7 @@ span:has(+[data-presented-files-row]){display:none}
     interface EntryToast {
       id: number;
       name: string;
-      kind: 'file' | 'folder';
+      kind: EntryKind;
       state: 'deleted' | 'restoring' | 'restored' | 'failed';
       error?: string | undefined;
       sessionId: string;
@@ -1026,7 +1026,7 @@ span:has(+[data-presented-files-row]){display:none}
     } as const;
 
     /** Message key for a failed rename/delete/restore. */
-    function entryErrorKey(res: { status: number; body: any }, kind: 'file' | 'folder'): string {
+    function entryErrorKey(res: { status: number; body: any }, kind: EntryKind): string {
       if (res.status === 501) return 'entry.noMv';
       if (res.status === 422 && /mount point/.test(String(res.body?.error)))
         return 'entry.mountPoint';
@@ -2374,7 +2374,7 @@ span:has(+[data-presented-files-row]){display:none}
               );
             }
           });
-          const targetOf = (kind: 'file' | 'folder', sessionId: string, path: string) => {
+          const targetOf = (kind: EntryKind, sessionId: string, path: string) => {
             const cwd = sessions.list.getSnapshot().byId[sessionId]?.cwd;
             const absolutePath = resolveWorkspacePath(cwd, path);
             return { kind, sessionId, absolutePath, cwd } as EntryTarget;

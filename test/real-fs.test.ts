@@ -22,6 +22,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,7 +36,6 @@ import { SandboxedFileSystem } from '@deepseek-ai/dsh-fs-sandbox';
 import type { DownloadContext, LiveSession, SaveContext } from '../src/context.ts';
 import { handleCreateFile, handleCreateFolder } from '../src/create-route.ts';
 import { handleDownload } from '../src/download-route.ts';
-import { setMoveCommand } from '../src/entry.ts';
 import {
   handleDeleteFile,
   handleDeleteFolder,
@@ -44,7 +44,7 @@ import {
   handleRestore,
 } from '../src/entry-route.ts';
 import { canonicalPath, landedInside, mayWrite } from '../src/fence.ts';
-import { handleDownloadFolder, handleFolderSummary } from '../src/folder-route.ts';
+import { FOLDER_LIMITS, handleDownloadFolder, handleFolderSummary } from '../src/folder-route.ts';
 import { undoMkdir } from '../src/paths.ts';
 import { handleSave } from '../src/save-route.ts';
 import { purgeTrash, slotName, slotTime, trashRelation, trashRootFor } from '../src/trash.ts';
@@ -687,11 +687,13 @@ test('rename.folder follows the sandbox, refuses files, symlinks and the root', 
 test('rename.folder without a GNU mv is a 501 and moves nothing', async () => {
   const dir = join(workspace, 'nomv');
   tree(dir);
-  const previous = setMoveCommand(join(base, 'no-such-mv'));
+  // A Host without mv: an empty PATH, which execFile searches.
+  const path = process.env.PATH;
+  process.env.PATH = join(base, 'empty-path');
   try {
     assert.equal((await renameFolder(realHost().save, dir, 'nomv2')).status, 501);
   } finally {
-    setMoveCommand(previous);
+    process.env.PATH = path;
   }
   assert.ok(isDir(dir) && !existsSync(join(workspace, 'nomv2')));
 });
@@ -1015,25 +1017,32 @@ test('download.folder streams a valid zip: names, bytes, empty folders, no symli
 });
 
 test('download.folder refuses folders over the limits with 413, files with 403', async () => {
-  const dir = join(workspace, 'zipbig');
-  tree(dir);
-  const request = () => new Request(`http://x/api/download.folder?path=${encodeURIComponent(dir)}`);
   const host = realHost().download;
+  const status = async (dir: string) => {
+    const res = await handleDownloadFolder(
+      host,
+      new Request(`http://x/api/download.folder?path=${encodeURIComponent(dir)}`),
+    );
+    await res.body?.cancel();
+    return res.status;
+  };
+  // Over the byte limit: one sparse file, which takes no disk space.
+  const big = join(workspace, 'zipbig');
+  mkdirSync(big);
+  writeFileSync(join(big, 'huge.bin'), '');
+  truncateSync(join(big, 'huge.bin'), FOLDER_LIMITS.maxBytes + 1);
+  assert.equal(await status(big), 413);
+  rmSync(big, { recursive: true });
+  // Over the entry limit: one empty file too many; at the limit it downloads.
+  const many = join(workspace, 'zipmany');
+  mkdirSync(many);
+  for (let i = 0; i <= FOLDER_LIMITS.maxEntries; i++) writeFileSync(join(many, `${i}`), '');
+  assert.equal(await status(many), 413);
+  rmSync(join(many, '0'));
+  assert.equal(await status(many), 200);
   assert.equal(
-    (await handleDownloadFolder(host, request(), { maxEntries: 3, maxBytes: 1e9 })).status,
-    413,
-  );
-  assert.equal(
-    (await handleDownloadFolder(host, request(), { maxEntries: 99, maxBytes: 1 })).status,
-    413,
-  );
-  assert.equal(
-    (await handleDownloadFolder(host, request(), { maxEntries: 4, maxBytes: 2 })).status,
-    200,
-  );
-  assert.equal(
-    (await getFolder(handleDownloadFolder as typeof handleFolderSummary, join(dir, 'a.txt')))
-      .status,
+    (await getFolder(handleDownloadFolder as typeof handleFolderSummary, join(many, '1'))).status,
     403,
   );
+  rmSync(many, { recursive: true });
 });
