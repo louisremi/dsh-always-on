@@ -62,7 +62,7 @@
     "provenance": true
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24.9.0"
   },
   "dsh": {
     "bundle": {

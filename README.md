@@ -107,7 +107,7 @@ Found a security problem? Please [open an issue](https://github.com/louisremi/ds
 
 ## Development
 
-The source is TypeScript; `npm run build` compiles it to `dist/` (it also runs automatically via `prepare` on install and pack). The tests run `.ts` files directly through Node's native type stripping, so **developing** needs Node ≥ 22.18 (or ≥ 23.6) — the plugin itself still only requires Node ≥ 20 at runtime.
+The source is TypeScript; `npm run build` compiles it to `dist/` (it also runs automatically via `prepare` on install and pack). The tests run `.ts` files directly through Node's native type stripping. Both developing and running the plugin need Node ≥ 24.9, the same as DSH itself.
 
 ```sh
 npm ci

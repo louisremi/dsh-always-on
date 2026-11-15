@@ -22,7 +22,7 @@ export interface ZipMember {
   open?: () => Promise<Readable>;
 }
 
-/** CRC-32 (IEEE), continuing from `crc`: Node's `zlib.crc32` (Node ≥ 20.15; DSH needs ≥ 24.9). */
+/** CRC-32 (IEEE), continuing from `crc`: Node's `zlib.crc32`. */
 export function crc32(data: Uint8Array, crc = 0): number {
   return zlib.crc32(data, crc);
 }

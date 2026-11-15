@@ -4,7 +4,7 @@ A DeepSeek Harness plugin for harnesses running in a container with no access to
 
 ## Development
 
-The source is TypeScript. `npm run build` compiles `src/` to `dist/`; the tests run `.ts` files through Node's native type stripping, so **developing** needs Node ≥ 22.18 (or ≥ 23.6), while the plugin itself only requires Node ≥ 20 at runtime.
+The source is TypeScript. `npm run build` compiles `src/` to `dist/`; the tests run `.ts` files through Node's native type stripping. Developing and running both need Node ≥ 24.9, the same as DSH (`engines.node` in package.json follows DSH's).
 
 ```sh
 npm ci
