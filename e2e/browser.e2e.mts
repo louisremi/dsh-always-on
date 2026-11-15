@@ -103,13 +103,13 @@ const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
  sidebarRightTabs:{register:(d)=>{window.__tabTypes.push(d);return()=>{}}},
  theme:{getTheme:()=>({active:{colorScheme:params.get('dark')?'dark':'light'}})},
  on:()=>()=>{},
- remote:{workspaceFiles:{stat:async(sessionId,path)=>({ok:true,value:{absolutePath:path.startsWith('/')?path:window.__ws+'/'+path}}),readBytes:async(sessionId,path)=>{
+ remote:{workspaceFiles:{stat:params.get('nostat')?undefined:async(sessionId,path)=>({ok:true,value:{absolutePath:path.startsWith('/')?path:window.__ws+'/'+path}}),readBytes:async(sessionId,path)=>{
    const r=await fetch('/fs/read?path='+encodeURIComponent(path)); if(r.status===404) return {ok:false,error:{code:'workspace-file/not-found'}};
    const j=await r.json(); const bin=atob(j.b64); const data=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)data[i]=bin.charCodeAt(i);
    return {ok:true,value:{data,eof:true,bytes:data.length,version:j.version,absolutePath:path}};}}},
  slots:{inject:(n,f)=>{const r=f();if(r&&typeof r.next==='function')for(const _ of r);},register:(o,c)=>{window.__regs.push([o,c]);}},
  contextMenus:{register:(c)=>{window.__menus.push(c);return()=>{}}},
- sessions:{list:{getSnapshot:()=>({byId:{sess:{cwd:window.__ws}}})}},
+ sessions:{list:{getSnapshot:()=>({byId:{sess:params.get('nocwd')?{}:{cwd:window.__ws}}})}},
  inject:(deps,cb)=>{if(params.get('menus')!=='none')cb(ctx);}};
 const exp=window.__mod.factory((s)=>{if(s==='react')return window.React;if(s==='@deepseek-ai/dsh-client-ui-primitives'){if(params.get('prim')==='none'||!window.__ft)throw new Error('missing');return window.__ft;}throw new Error(s)});
 exp.apply(ctx);
@@ -838,6 +838,74 @@ await check(
     assert.equal(readFileSync(join(d, 'sub', 'b.txt'), 'utf8'), 'bbb');
   },
 );
+
+await check(
+  'Folder delete: a dirty tab the Host cannot place blocks it (fails closed)',
+  async (page) => {
+    const d = join(dir, 'unplaced');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'c.txt'), 'cc');
+    // No workspace root on the client and no stat on the Host: the relative
+    // tab path cannot be resolved, so it must count as inside.
+    await page.goto(`${base}/?what=actions&nocwd=1&nostat=1&abs=${encodeURIComponent(d)}`);
+    await page.evaluate((a: string) => {
+      (window as any).__tabs = [{ id: 'tab1', kind: 'dlf-editor', contentId: a }];
+    }, fileAddr('elsewhere/c.txt'));
+    await page.route('https://cdn.jsdelivr.net/**', (route: any) => route.abort());
+    await page.evaluate(
+      (a: string) => {
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const w = window as any;
+        const Body = w.__regs.find(([o]: any) => o.name === 'sidebar.right.pane.tab')[1];
+        const tab = {
+          id: 'tab1',
+          contentId: a,
+          title: 'c.txt',
+          signal: new AbortController().signal,
+          actions: { bindCommands: () => () => {} },
+        };
+        w.ReactDOM.createRoot(host).render(
+          w.React.createElement(Body, { useTabInfo: () => ({ tab }), sessionId: 'sess' }),
+        );
+      },
+      fileAddr(join(d, 'c.txt')),
+    );
+    await page.waitForSelector('textarea.dlf-ed-text', { timeout: 30000 });
+    await page.click('textarea.dlf-ed-text');
+    await page.keyboard.type('x');
+    await page.waitForFunction(() => document.querySelector('.dlf-ed-dot'));
+    await menuRun(page, 'directory', d, 'delete');
+    await page.click('[data-dlf-dialog] button[type=submit]');
+    await page.waitForFunction(() =>
+      /entry\.dirtyFolder/.test(
+        document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+      ),
+    );
+    assert.equal(readFileSync(join(d, 'c.txt'), 'utf8'), 'cc');
+  },
+);
+
+await check('Folder delete: a folder holding a writable root says why', async (page) => {
+  const d = join(dir, 'holds-root');
+  mkdirSync(d, { recursive: true });
+  await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(d)}`);
+  await page.route('**/api/delete.folder', (route: any) =>
+    route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'this folder holds a writable root of the session' }),
+    }),
+  );
+  await menuRun(page, 'directory', d, 'delete');
+  await page.click('[data-dlf-dialog] button[type=submit]');
+  await page.waitForFunction(() =>
+    /entry\.holdsRoot/.test(
+      document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
+    ),
+  );
+  assert.ok(statSync(d).isDirectory());
+});
 
 await check('Delete: a folder holding a mounted volume names it in the dialog', async (page) => {
   const d = join(dir, 'holds-mount');

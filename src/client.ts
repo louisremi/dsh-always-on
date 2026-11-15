@@ -172,6 +172,8 @@ window.__ModuleLoader__.load({
       'entry.dirtyFolder':
         'A file in this folder has unsaved edits in the editor. Save or discard them first.',
       'entry.noMv': 'Moving folders needs GNU coreutils mv on the Harness host.',
+      'entry.holdsRoot':
+        'This folder holds a workspace or another writable folder of the session, so it cannot be moved or deleted.',
       'entry.crossDevice':
         'Not possible: this is on another filesystem (a mount) than where it would go.',
       'entry.mountPoint': 'This is a mount point, so it cannot be deleted. Unmount it first.',
@@ -250,6 +252,7 @@ window.__ModuleLoader__.load({
       'entry.dirty': '此文件在编辑器中有未保存的修改，请先保存或放弃。',
       'entry.dirtyFolder': '此文件夹中有文件在编辑器中有未保存的修改，请先保存或放弃。',
       'entry.noMv': '移动文件夹需要 Harness 主机上有 GNU coreutils mv。',
+      'entry.holdsRoot': '此文件夹包含会话的工作区或其他可写文件夹，因此无法移动或删除。',
       'entry.crossDevice': '无法操作：它与目标位置位于不同的文件系统（挂载点）。',
       'entry.mountPoint': '这是一个挂载点，无法删除。请先卸载。',
     };
@@ -899,8 +902,9 @@ span:has(+[data-presented-files-row]){display:none}
      * or one relative to the session's workspace: with the workspace root
      * (`cwd`) known it is joined to it; without it, a relative path whose
      * suffix fits is resolved by the Host (`workspaceFiles.stat`), so `a.txt`
-     * never matches `/ws/sub/a.txt`. Only on a Harness without that call does
-     * the suffix alone decide, erring towards "this file".
+     * never matches `/ws/sub/a.txt`. When the Host cannot answer (an older
+     * Harness without that call, or a failed call), the tab counts as shown:
+     * a dirty tab then blocks the rename or delete instead of losing its edits.
      */
     async function tabsShowing(
       sidebarRight: SidebarRight,
@@ -922,13 +926,14 @@ span:has(+[data-presented-files-row]){display:none}
         if (path.startsWith('/')) return covers(path);
         if (options.cwd !== undefined) return covers(resolveWorkspacePath(options.cwd, path));
         if (options.folder !== true && !absolutePath.endsWith(`/${path}`)) return false;
+        // Unresolvable: assume it is in, so unsaved edits block rather than get lost.
         const stat = remote.workspaceFiles.stat;
-        if (typeof stat !== 'function') return options.folder !== true;
+        if (typeof stat !== 'function') return true;
         try {
           const result = await stat.call(remote.workspaceFiles, sessionId, path);
           return result.ok && covers(result.value.absolutePath);
         } catch {
-          return false;
+          return true;
         }
       };
       const matches = await Promise.all(
@@ -1030,6 +1035,8 @@ span:has(+[data-presented-files-row]){display:none}
       if (res.status === 400 && /into itself/.test(String(res.body?.error)))
         return 'rename.intoItself';
       if (res.status === 403 && /trash/.test(String(res.body?.error))) return 'delete.trash';
+      if (res.status === 403 && /holds a writable root/.test(String(res.body?.error)))
+        return 'entry.holdsRoot';
       if (res.status === 404 && kind === 'folder' && res.body?.error !== 'session not found')
         return 'rename.missingFolder';
       return mutationErrorKey(res, 'file');

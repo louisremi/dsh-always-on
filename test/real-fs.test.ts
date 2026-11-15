@@ -552,6 +552,29 @@ test('extra writable roots and cold sessions work at route level', async () => {
   );
 });
 
+test('a folder holding a writable root can be neither renamed nor deleted', async () => {
+  const parent = join(workspace, 'holder');
+  const extra = join(parent, 'extra-root');
+  mkdirSync(join(extra, 'inside'), { recursive: true });
+  writeFileSync(join(extra, 'keep.txt'), 'k');
+  for (const mode of ['workspace-write', 'danger-full-access'] as const) {
+    const host = realHost(mode, { extraRoots: [extra] }).save;
+    const del = await removeFolder(host, parent);
+    assert.equal(del.status, 403, mode);
+    assert.match((await del.json()).error, /holds a writable root/);
+    assert.equal((await renameFolder(host, parent, 'holder2')).status, 403, mode);
+    // Inside the root is fine, and so is a sibling of it.
+    assert.equal((await renameFolder(host, join(extra, 'inside'), 'inside2')).status, 200);
+    assert.equal((await renameFolder(host, join(extra, 'inside2'), 'inside')).status, 200);
+  }
+  assert.equal(readFileSync(join(extra, 'keep.txt'), 'utf8'), 'k');
+  // A danger-mode session whose workspace is inside the folder: refused too.
+  const inner = realHost('danger-full-access', { workspaceRoot: join(extra, 'inside') }).save;
+  assert.equal((await removeFolder(inner, parent)).status, 403);
+  // Without that root, the folder is an ordinary one.
+  assert.equal((await removeFolder(realHost().save, parent)).status, 200);
+});
+
 test('a created entry is checked where it landed (ancestor swapped for a symlink)', async () => {
   const policy = { mode: 'workspace-write', workspaceRoot: workspace };
   // What a mkdir through a swapped-in symlink produces: an entry that is

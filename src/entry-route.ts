@@ -22,7 +22,7 @@ import {
   moveDirNoReplace,
   moveFileNoReplace,
 } from './entry.ts';
-import { assertWritable, canonicalPath } from './fence.ts';
+import { assertWritable, canonicalPath, holdsWritableRoot } from './fence.ts';
 import { failWith, handlePost, json, jsonObject, mutationStatus } from './http.ts';
 import { nameSegments, undoMkdir } from './paths.ts';
 import { policyFor } from './session-policy.ts';
@@ -111,6 +111,8 @@ async function writableEntry(
   const info = await lstat(input.path);
   if (kind === 'file' ? !info.isFile() : !info.isDirectory())
     return fail(403, kind === 'file' ? 'not a regular file' : 'not a folder');
+  if (kind === 'folder' && (await holdsWritableRoot(policy, input.path)))
+    return fail(403, 'this folder holds a writable root of the session');
   return { kind, hostPath: input.path, policy, dev: info.dev, ino: info.ino };
 }
 

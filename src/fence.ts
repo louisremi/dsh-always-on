@@ -141,6 +141,17 @@ export async function landedInside(policy: SandboxPolicy, path: string): Promise
   }
 }
 
+/**
+ * Whether the folder at `path` holds a workspace root or extra writable root
+ * of the policy (strictly inside it). Moving such a folder would take a root
+ * the session works in along with it, so rename and delete refuse it in every
+ * mode.
+ */
+export async function holdsWritableRoot(policy: SandboxPolicy, path: string): Promise<boolean> {
+  const target = await canonicalPath(path);
+  return (await workspaceRoots(policy)).some((root) => root !== target && isUnder(root, target));
+}
+
 /** {@link mayWrite}, throwing {@link FenceError} on refusal. */
 export async function assertWritable(
   policy: SandboxPolicy,
