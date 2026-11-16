@@ -5,7 +5,7 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin for
 Run the Harness in a Docker container — on a NAS, a server, anywhere — and it lives on a machine of its own: the stock "show file location" and "Open in app" buttons would have to reach a desktop that isn't there, and nothing inside the container can read or write your computer's files. Your browser is the only connection between you and your files. This plugin makes it enough, replacing the dead buttons with things that work through it:
 
 - **Download file** buttons that save a file to your computer.
-- **Show files**, which opens the sidebar file explorer.
+- **Show files**, which opens the sidebar file explorer: from the session header, and from each workspace's menu in the left sidebar.
 - **New file** and **New folder** in the Files tab, and **Rename/move**, **Delete** (with a 10-second **Restore**) and **Download as .zip** in the Files tree's right-click menu, for files and folders.
 - **Edit**, which opens a text file in an in-sidebar code editor ([Monaco](https://microsoft.github.io/monaco-editor/), the editor behind VS Code) and saves it back to the Harness host.
 
@@ -34,6 +34,10 @@ The download button appears wherever the folder button used to be: file cards un
 The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
 
 ![The Show files button in the session header, and the sidebar Files tab it opens](docs/screenshots/show-files.png)
+
+**In the left sidebar**, the menu of each workspace (the `…` button on its row, or a right-click) gets a **Show files** entry above the stock "Show in folder", which stays greyed out. It opens the Files tab on that workspace: for the session on screen if it belongs to the workspace, else for the workspace's most recently updated session (archived and subagent sessions don't count), else for a new session, which is what opening a workspace with no session does anyway.
+
+![The Show files entry in a workspace's menu in the left sidebar](docs/screenshots/workspace-menu.png)
 
 ### Files and folders
 
@@ -89,7 +93,7 @@ It adds its buttons to the same UI slots as the stock ones, and its file and fol
 
 - the stock "Show file location" and "Open in app" buttons disappear;
 - the "Open in ▸" submenu of sessions disappears;
-- "Show in folder" and "Open in default application" in file and folder menus stay, greyed out.
+- "Show in folder" and "Open in default application" in file and folder menus, and "Show in folder" in a workspace's menu, stay, greyed out (the workspace menu gets "Show files" next to it).
 
 "Open in sidebar", "Open in floating panel", the copy-path entries and Download keep working. The stock "This Host has no desktop…" note above presented files is hidden, since that is the expected state here. Disabling the plugin restores all of it.
 

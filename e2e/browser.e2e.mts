@@ -92,13 +92,13 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%} #root{width:600px;height:500px}</style></head><body><div id="root"></div>
 <script src="/react.js"></script><script src="/react-dom.js"></script><script src="/ft.js"></script>
 <script>window.__ws=${JSON.stringify(dir)};window.__regs=[];window.__opened=[];window.__closeHandlers={};window.__tabTypes=[];
-window.__menus=[];window.__ModuleLoader__={load:(m)=>{window.__mod=m;}};</script>
+window.__menus=[];window.__tabsOpened=[];window.__sessionsOpened=[];window.__workspacesOpened=[];window.__mounted=undefined;window.__ModuleLoader__={load:(m)=>{window.__mod=m;}};</script>
 <script src="/client.js"></script>
 <script>
 const params=new URLSearchParams(location.search);
 const t=(k,v)=>k+(v?JSON.stringify(v):'');
 const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
- sidebarRight:{openResource:(a,o)=>window.__opened.push([a,o]),openTab:()=>{},registerCloseHandler:(k,f)=>{window.__closeHandlers[k]=f;return()=>{}},
+ sidebarRight:{openResource:(a,o)=>window.__opened.push([a,o]),mounted:{getSnapshot:()=>window.__mounted},openTab:(k)=>{window.__tabsOpened.push(k)},registerCloseHandler:(k,f)=>{window.__closeHandlers[k]=f;return()=>{}},
   tabsIn:()=>window.__tabs||[],closeIn:(s,id)=>{(window.__closed=window.__closed||[]).push(id);}},
  sidebarRightTabs:{register:(d)=>{window.__tabTypes.push(d);return()=>{}}},
  theme:{getTheme:()=>({active:{colorScheme:params.get('dark')?'dark':'light'}})},
@@ -109,7 +109,9 @@ const ctx={effect:(f)=>f(),locale:{register:()=>()=>{},bind:()=>t},
    return {ok:true,value:{data,eof:true,bytes:data.length,version:j.version,absolutePath:path}};}}},
  slots:{inject:(n,f)=>{const r=f();if(r&&typeof r.next==='function')for(const _ of r);},register:(o,c)=>{window.__regs.push([o,c]);}},
  contextMenus:{register:(c)=>{window.__menus.push(c);return()=>{}}},
- sessions:{list:{getSnapshot:()=>({byId:{sess:params.get('nocwd')?{}:{cwd:window.__ws}}})}},
+ sessions:{list:{getSnapshot:()=>({byId:{sess:params.get('nocwd')?{}:{cwd:window.__ws},old:{updatedAt:1},new:{updatedAt:9},sub:{updatedAt:99,origin:'subagent'},gone:{updatedAt:50}}})}},
+ workspaces:{list:{getSnapshot:()=>({items:[{workspaceId:'w1',sessionIds:['old','new','sub','gone']},{workspaceId:'w2',sessionIds:[]},{workspaceId:'w0',sessionIds:['sess']}],archivedSessionIds:['gone']})}},
+ uiWorkspace:{openSession:(id)=>{window.__sessionsOpened.push(id);window.__mounted=id;},openWorkspace:async(id,before)=>{window.__workspacesOpened.push(id);window.__mounted='fresh';before('fresh');}},
  inject:(deps,cb)=>{if(params.get('menus')!=='none')cb(ctx);}};
 const exp=window.__mod.factory((s)=>{if(s==='react')return window.React;if(s==='@deepseek-ai/dsh-client-ui-primitives'){if(params.get('prim')==='none'||!window.__ft)throw new Error('missing');return window.__ft;}throw new Error(s)});
 exp.apply(ctx);
@@ -517,6 +519,65 @@ await check(
         document.querySelector('[data-dlf-dialog] [role=alert]')?.textContent ?? '',
       ),
     );
+  },
+);
+
+/** Resolve and run the workspace row's "Show files", as the stock context menu does. */
+const workspaceMenu = (page: any, workspaceId: string, run: boolean) =>
+  page.evaluate(
+    async ([w, go]: [string, boolean]) => {
+      const c = (window as any).__menus.find((m: any) => m.target === 'workspace');
+      const items = await c.resolve(
+        { workspaceId: w, path: '/x', displayTitle: 'x' },
+        new AbortController().signal,
+      );
+      if (go) await items[0].run();
+      return items.map(({ run: _run, ...a }: any) => a);
+    },
+    [workspaceId, run] as [string, boolean],
+  );
+
+await check(
+  'Workspace row menu: "Show files" shows the files of the on-screen, latest, or a new session',
+  async (page) => {
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(dir)}`);
+    const state = () =>
+      page.evaluate(() => {
+        const w = window as any;
+        return {
+          tabs: w.__tabsOpened,
+          sessions: w.__sessionsOpened,
+          workspaces: w.__workspacesOpened,
+        };
+      });
+    const items = await workspaceMenu(page, 'w0', false);
+    assert.deepEqual(
+      items.map((i: any) => i.id),
+      ['showFiles'],
+    );
+    assert.deepEqual(items[0].icon, { key: 'always-on.files' });
+    // The session on screen belongs to the workspace: just switch tab.
+    await page.evaluate(() => ((window as any).__mounted = 'sess'));
+    await workspaceMenu(page, 'w0', true);
+    assert.deepEqual(await state(), { tabs: ['files'], sessions: [], workspaces: [] });
+    // Another workspace: its latest session, skipping archived and subagent ones.
+    await workspaceMenu(page, 'w1', true);
+    assert.deepEqual(await state(), {
+      tabs: ['files', 'files'],
+      sessions: ['new'],
+      workspaces: [],
+    });
+    // No session at all: a new one is opened, with the tab opened for it.
+    await workspaceMenu(page, 'w2', true);
+    assert.deepEqual(await state(), {
+      tabs: ['files', 'files', 'files'],
+      sessions: ['new'],
+      workspaces: ['w2'],
+    });
+    // Without the stock workspace plugin, the rest still loads.
+    await page.goto(`${base}/?what=actions&menus=none&abs=${encodeURIComponent(dir)}`);
+    await page.waitForSelector('[data-download-file]');
+    assert.equal(await page.evaluate(() => (window as any).__menus.length), 0);
   },
 );
 

@@ -98,6 +98,8 @@ window.__ModuleLoader__.load({
       'download.title': 'Download file',
       'download.error': 'Could not download the file. Try again.',
       'files.show': 'Show files',
+      'workspace.showFiles': 'Show files',
+      'workspace.showFilesError': 'Could not show the files. Try again.',
       'edit.title': 'Edit file',
       'editor.save': 'Save',
       'editor.saving': 'Saving…',
@@ -182,6 +184,8 @@ window.__ModuleLoader__.load({
       'download.title': '下载文件',
       'download.error': '无法下载文件，请重试',
       'files.show': '显示文件',
+      'workspace.showFiles': '显示文件',
+      'workspace.showFilesError': '无法显示文件，请重试',
       'edit.title': '编辑文件',
       'editor.save': '保存',
       'editor.saving': '正在保存',
@@ -412,6 +416,8 @@ span:has(+[data-presented-files-row]){display:none}
     // Sidebar surface the buttons drive: tab switching, resource tabs, close guards.
     interface SidebarRight {
       openTab(tab: string): unknown;
+      /** The session on screen, whose surface `openTab` acts on. */
+      mounted?: { getSnapshot(): string | undefined };
       /** Open tab records of a session (present on the stock controller). */
       tabsIn?(sessionId: string): readonly { id: string; kind: string; contentId: string }[];
       /** Close one tab of a session, running its close handler. */
@@ -2178,6 +2184,70 @@ span:has(+[data-presented-files-row]){display:none}
       );
     }
 
+    // ───────────────────── workspace row: show files ─────────────────────
+
+    /**
+     * Open the sidebar Files tab once `sessionId` is the session on screen: the
+     * tab belongs to a session's surface, which only exists after the session
+     * is mounted, so retry for a few seconds while it settles.
+     */
+    function openFilesWhenMounted(sidebarRight: SidebarRight, sessionId: string): void {
+      const attempt = (): boolean => {
+        if (sidebarRight.mounted?.getSnapshot() !== sessionId) return false;
+        try {
+          sidebarRight.openTab('files');
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      if (attempt()) return;
+      let tries = 0;
+      const timer = setInterval(() => {
+        if (attempt() || ++tries >= 60) clearInterval(timer);
+      }, 50);
+    }
+
+    /**
+     * Show a workspace's files: the session on screen when it belongs to that
+     * workspace, else its most recently updated session, else a new blank one
+     * (what opening the workspace does anyway).
+     */
+    async function showWorkspaceFiles(
+      workspaceId: string,
+      scope: {
+        sidebarRight: SidebarRight;
+        sessions: ClientSessions;
+        workspaces: ClientWorkspaces;
+        uiWorkspace: UiWorkspace;
+      },
+    ): Promise<void> {
+      const { sidebarRight, sessions, workspaces, uiWorkspace } = scope;
+      const snapshot = workspaces.list.getSnapshot();
+      const row = snapshot.items.find((item) => item.workspaceId === workspaceId);
+      if (row === undefined) throw new Error('workspace unavailable');
+      const current = sidebarRight.mounted?.getSnapshot();
+      if (current !== undefined && row.sessionIds.includes(current)) {
+        sidebarRight.openTab('files');
+        return;
+      }
+      const byId = sessions.list.getSnapshot().byId;
+      const candidates = row.sessionIds
+        .filter(
+          (id) => !snapshot.archivedSessionIds.includes(id) && byId[id]?.origin !== 'subagent',
+        )
+        .sort((a, b) => (byId[b]?.updatedAt ?? 0) - (byId[a]?.updatedAt ?? 0));
+      const existing = candidates[0];
+      if (existing !== undefined) {
+        uiWorkspace.openSession(existing);
+        openFilesWhenMounted(sidebarRight, existing);
+        return;
+      }
+      await uiWorkspace.openWorkspace(workspaceId, (id) => {
+        openFilesWhenMounted(sidebarRight, id);
+      });
+    }
+
     // ───────────────────────────── plugin body ─────────────────────────────
 
     /** One entry of the stock context menu (`@deepseek-ai/dsh-client-ui-context-menu`). */
@@ -2203,9 +2273,45 @@ span:has(+[data-presented-files-row]){display:none}
         ): readonly MenuAction[] | Promise<readonly MenuAction[]>;
       }): () => void;
     }
+    /** The workspace row's menu target (`@deepseek-ai/dsh-client-ui-workspace`). */
+    interface WorkspaceMenuTarget {
+      workspaceId: string;
+      path: string;
+      displayTitle: string;
+    }
+    /** The parts of `ctx.contextMenus` that contribute to a workspace row's menu. */
+    interface WorkspaceMenus {
+      register(contribution: {
+        id: string;
+        target: 'workspace';
+        order: number;
+        resolve(target: WorkspaceMenuTarget, signal: AbortSignal): readonly MenuAction[];
+      }): () => void;
+    }
+    /** The parts of the Client `workspaces` service the workspace menu reads. */
+    interface ClientWorkspaces {
+      list: {
+        getSnapshot(): {
+          items: readonly { workspaceId: string; sessionIds: readonly string[] }[];
+          archivedSessionIds: readonly string[];
+        };
+      };
+    }
+    /** The parts of `ctx.uiWorkspace` the workspace menu navigates with. */
+    interface UiWorkspace {
+      openSession(sessionId: string): void;
+      openWorkspace(workspaceId: string, beforeOpen?: (sessionId: string) => void): Promise<void>;
+    }
     /** The parts of the Client `sessions` service the menus use: a session's workspace root. */
     interface ClientSessions {
-      list: { getSnapshot(): { byId: Record<string, { cwd?: string | undefined } | undefined> } };
+      list: {
+        getSnapshot(): {
+          byId: Record<
+            string,
+            { cwd?: string | undefined; origin?: string; updatedAt?: number } | undefined
+          >;
+        };
+      };
     }
 
     /** The client context cordis assembles from the `inject` list below. */
@@ -2215,6 +2321,8 @@ span:has(+[data-presented-files-row]){display:none}
       inject?(deps: string[], callback: (scope: ClientCtx) => void): unknown;
       contextMenus?: ContextMenus;
       sessions?: ClientSessions;
+      workspaces?: ClientWorkspaces;
+      uiWorkspace?: UiWorkspace;
       slots: {
         inject(name: string, factory: () => unknown): unknown;
         register(
@@ -2442,6 +2550,48 @@ span:has(+[data-presented-files-row]){display:none}
         };
         if (typeof ctx.inject === 'function')
           ctx.inject(['contextMenus', 'sessions'], registerMenus);
+
+        // The workspace rows of the left sidebar have a "Show in folder" entry
+        // that reveals the folder on the Host's desktop (greyed out here, see
+        // `nativeOpen: false` in cordis.patch.yml). This one shows the
+        // workspace's files in the sidebar Files tab instead.
+        const registerWorkspaceMenu = (scope: ClientCtx) => {
+          const menus = scope.contextMenus as unknown as WorkspaceMenus;
+          const services = {
+            sidebarRight: scope.sidebarRight,
+            sessions: scope.sessions as ClientSessions,
+            workspaces: scope.workspaces as ClientWorkspaces,
+            uiWorkspace: scope.uiWorkspace as UiWorkspace,
+          };
+          scope.slots.inject('contextMenu.icon', () =>
+            scope.slots.register({ name: 'contextMenu.icon', key: 'always-on.files' }, () =>
+              h(FilesIcon, { size: 16 }),
+            ),
+          );
+          scope.effect(
+            () =>
+              menus.register({
+                id: 'always-on.workspace',
+                target: 'workspace',
+                order: 190,
+                resolve: ({ workspaceId }) => [
+                  {
+                    id: 'showFiles',
+                    label: t('workspace.showFiles'),
+                    icon: { key: 'always-on.files' },
+                    failureLabel: t('workspace.showFilesError'),
+                    run: () => showWorkspaceFiles(workspaceId, services),
+                  },
+                ],
+              }),
+            'always-on: workspace menu',
+          );
+        };
+        if (typeof ctx.inject === 'function')
+          ctx.inject(
+            ['contextMenus', 'sessions', 'workspaces', 'uiWorkspace', 'sidebarRight'],
+            registerWorkspaceMenu,
+          );
 
         // ── sidebar editor tab ──
         ctx.effect(
