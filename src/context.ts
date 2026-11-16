@@ -39,7 +39,7 @@ export interface WriteOutcome {
 export interface FetchRoute {
   path: string;
   methods: string[];
-  requestBody?: string | undefined;
+  requestBody?: 'buffered' | 'streaming' | undefined;
   fetch(request: Request): Response | Promise<Response>;
 }
 

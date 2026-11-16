@@ -37,6 +37,7 @@ import {
 import { registerRoute } from './http.ts';
 import { startPurge } from './purge.ts';
 import { registerSaveRoute } from './save-route.ts';
+import { handleUpload, UPLOAD_FILE_PATH } from './upload-route.ts';
 
 /** Services the routes need: auth fence, filesystem, session lookups. */
 export const inject = [
@@ -70,7 +71,7 @@ export interface PluginContext {
 /**
  * Host half: serves authenticated file and folder downloads
  * (/api/download.file, /api/download.folder), folder summaries, guarded text
- * saves at /api/save.file, new empty files and folders, rename/move and
+ * saves at /api/save.file, new empty files and folders, uploads (/api/upload.file), rename/move and
  * delete (to a trash, with restore) for files and folders. The Client half
  * (src/client.ts) swaps the "Show file location" buttons for download
  * buttons, adds the Files tree's menu entries and the sidebar editor.
@@ -97,6 +98,17 @@ export function apply(ctx: PluginContext): void {
   for (const [path, handle] of mutations) {
     ctx.effect(() => registerRoute(ctx, { path, methods: ['POST'], handle }), `always-on: ${path}`);
   }
+  // The only streaming route: a file's bytes are never held whole in memory.
+  ctx.effect(
+    () =>
+      registerRoute(ctx, {
+        path: UPLOAD_FILE_PATH,
+        methods: ['POST'],
+        requestBody: 'streaming',
+        handle: handleUpload,
+      }),
+    `always-on: ${UPLOAD_FILE_PATH}`,
+  );
   const reads = [
     [SUMMARY_PATH, handleFolderSummary],
     [DOWNLOAD_FOLDER_PATH, (c: PluginContext, r: Request) => handleDownloadFolder(c, r)],

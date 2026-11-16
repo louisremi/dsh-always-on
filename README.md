@@ -6,7 +6,7 @@ Run the Harness in a Docker container — on a NAS, a server, anywhere — and i
 
 - **Download file** buttons that save a file to your computer.
 - **Show files**, which opens the sidebar file explorer: from the session header, and from each workspace's menu in the left sidebar.
-- **New file** and **New folder** in the Files tab, and **Rename/move**, **Delete** (with a 10-second **Restore**) and **Download as .zip** in the Files tree's right-click menu, for files and folders.
+- **New file**, **New folder** and **Upload files** in the Files tab, and **Upload files…**, **Rename/move**, **Delete** (with a 10-second **Restore**) and **Download as .zip** in the Files tree's right-click menu, for files and folders.
 - **Edit**, which opens a text file in an in-sidebar code editor ([Monaco](https://microsoft.github.io/monaco-editor/), the editor behind VS Code) and saves it back to the Harness host.
 
 ## Install
@@ -47,6 +47,14 @@ The workspace folder button in the session header becomes a single **Show files*
 
 **New folder.** The button next to New file creates a folder (`docs/drafts` creates both levels) in the folder the Files tab shows. Same rules: it never replaces anything and follows the sandbox mode. Since the Harness filesystem layer has no "make directory" operation, the plugin calls `mkdir` itself, after the same sandbox check. That is only possible when the Harness files live on the Harness host, which is also what downloads need.
 
+**Upload files.** The upload button in the Files tab toolbar (and **Upload files…** in a folder's right-click menu, including the workspace folder) opens your computer's file picker; pick one or more files and they are uploaded into the folder the tab shows, or the folder you right-clicked. Files stream to the Host as they arrive, up to 2 GiB each, so a large file is not held in memory. It never overwrites: a name that is taken is skipped and the other files still go. It follows the session's sandbox mode like New file. A file's bytes go to a hidden temporary file in the target folder, which is then given the real name only if that name is free (a hard link, so it either lands whole or not at all); an error or a cancelled upload leaves nothing behind. A progress toast shows the file and percentage, with **Cancel**, then a summary of what was uploaded, skipped, too large or succeeded. Only the file name is used, never a path from the browser.
+
+![The upload button in the Files tab toolbar](docs/screenshots/upload-button.png)
+
+![Upload files… in a folder's right-click menu](docs/screenshots/upload-menu.png)
+
+![The upload progress toast, with Cancel](docs/screenshots/upload-progress.png)
+
 **Rename / move, Delete and Restore.** Right-click a file or folder in the sidebar's Files tree (or use its `…` menu) for **Rename or move…** and **Delete…**:
 
 - **Rename or move** asks for a new name, with the stem pre-selected. A plain name renames in place, `folder/name` moves it into a (possibly new) sub-folder, and an absolute path moves it there. It never replaces anything: if the name is taken (even by an empty folder), it says so. A folder can't be moved into itself. Open tabs follow the file, or the files of the folder, to the new place.
@@ -85,7 +93,7 @@ The file opens in its own editor tab:
 The plugin adds authenticated routes to the Harness:
 
 - reads: `GET /api/download.file`, `GET /api/download.folder` and `GET /api/folder.summary`;
-- writes: `POST /api/save.file`, `/api/create.file`, `/api/create.folder`, `/api/rename.file`, `/api/rename.folder`, `/api/delete.file`, `/api/delete.folder` and `/api/restore.entry`.
+- writes: `POST /api/save.file`, `/api/create.file`, `/api/create.folder`, `/api/upload.file` (the only streaming one), `/api/rename.file`, `/api/rename.folder`, `/api/delete.file`, `/api/delete.folder` and `/api/restore.entry`.
 
 It adds its buttons to the same UI slots as the stock ones, and its file and folder actions to the stock context menu (`ctx.contextMenus`, DSH ≥ 0.2.2-rc.1).
 

@@ -19,6 +19,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -48,6 +49,7 @@ import { FOLDER_LIMITS, handleDownloadFolder, handleFolderSummary } from '../src
 import { undoMkdir } from '../src/paths.ts';
 import { handleSave } from '../src/save-route.ts';
 import { purgeTrash, slotName, slotTime, trashRelation, trashRootFor } from '../src/trash.ts';
+import { handleUpload, UPLOAD_LIMITS } from '../src/upload-route.ts';
 import { walkFolder } from '../src/walk.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
@@ -530,7 +532,7 @@ test('saves keep the agent grant: temp areas stay writable, like for the agent',
 });
 
 test('extra writable roots and cold sessions work at route level', async () => {
-  const extra = join(base, 'extra');
+  const extra = join(base, 'up-extra');
   mkdirSync(extra, { recursive: true });
   const host = realHost('workspace-write', { extraRoots: [extra] }).save;
   assert.equal((await create(host, { directory: extra, name: 'e.txt' })).status, 201);
@@ -1045,4 +1047,243 @@ test('download.folder refuses folders over the limits with 413, files with 403',
     403,
   );
   rmSync(many, { recursive: true });
+});
+
+// ─────────────────────────────── upload.file ───────────────────────────────
+
+/** A POST of raw bytes, streamed like the Harness hands them over. */
+const upload = (
+  ctx: SaveContext,
+  query: Record<string, string>,
+  body: Uint8Array | string,
+  headers: Record<string, string | null> = {},
+  signal?: AbortSignal,
+) => {
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+  const all: Record<string, string | null> = {
+    'content-type': 'application/octet-stream',
+    'content-length': String(bytes.length),
+    ...headers,
+  };
+  const init: Record<string, string> = {};
+  for (const [name, value] of Object.entries(all)) if (value !== null) init[name] = value;
+  return handleUpload(
+    ctx,
+    new Request(
+      `http://x/api/upload.file?${new URLSearchParams({ sessionId: 'sess', ...query })}`,
+      {
+        method: 'POST',
+        headers: init,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        }),
+        duplex: 'half',
+        ...(signal === undefined ? {} : { signal }),
+      } as RequestInit,
+    ),
+  );
+};
+const uploadDir = (name: string) => {
+  const dir = join(workspace, name);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+};
+
+test('upload.file stores the exact bytes as a new file and leaves no temporary file', async () => {
+  const dir = uploadDir('up-basic');
+  const bytes = Uint8Array.from({ length: 300_000 }, (_, i) => i % 251);
+  const res = await upload(realHost().save, { directory: dir, name: 'blob.bin' }, bytes);
+  assert.equal(res.status, 201);
+  assert.deepEqual(await res.json(), { absolutePath: join(dir, 'blob.bin'), bytes: bytes.length });
+  assert.deepEqual(readFileSync(join(dir, 'blob.bin')), Buffer.from(bytes));
+  assert.deepEqual(readdirSync(dir), ['blob.bin']);
+  // An empty file is a file too.
+  assert.equal((await upload(realHost().save, { directory: dir, name: 'empty' }, '')).status, 201);
+  assert.equal(statSync(join(dir, 'empty')).size, 0);
+});
+
+test('upload.file never overwrites a file, a folder or a symlink', async () => {
+  const dir = uploadDir('up-exists');
+  writeFileSync(join(dir, 'a.txt'), 'keep');
+  mkdirSync(join(dir, 'folder'));
+  symlinkSync(join(outside, 'secret.txt'), join(dir, 'link'));
+  const host = realHost();
+  for (const name of ['a.txt', 'folder', 'link']) {
+    const res = await upload(host.save, { directory: dir, name }, 'new');
+    assert.equal(res.status, 409, name);
+  }
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'keep');
+  assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'secret\n');
+  assert.deepEqual(stray(dir, ['a.txt', 'folder', 'link']), []);
+});
+
+test('upload.file follows the sandbox: read-only, outside, symlinked folders, the root', async () => {
+  const dir = uploadDir('up-fence');
+  const body = 'x';
+  const outsideBefore = readdirSync(outside);
+  assert.equal(
+    (await upload(realHost('read-only').save, { directory: dir, name: 'a' }, body)).status,
+    403,
+  );
+  assert.equal(
+    (await upload(realHost().save, { directory: outside, name: 'a' }, body)).status,
+    403,
+  );
+  assert.equal(
+    (await upload(realHost().save, { directory: join(workspace, 'escape-dir'), name: 'a' }, body))
+      .status,
+    403,
+  );
+  assert.deepEqual(readdirSync(outside), outsideBefore);
+  assert.deepEqual(readdirSync(dir), []);
+  // The temp areas are not granted (only the workspace and its extra roots).
+  assert.equal(
+    (await upload(realHost().save, { directory: tmpdir(), name: 'dlf-nope' }, body)).status,
+    403,
+  );
+  // Danger mode writes anywhere, like the agent.
+  const res = await upload(
+    realHost('danger-full-access').save,
+    { directory: outside, name: 'ok' },
+    body,
+  );
+  assert.equal(res.status, 201);
+  rmSync(join(outside, 'ok'));
+  // A folder that does not exist is a 404, and nothing is created.
+  const gone = await upload(
+    realHost().save,
+    { directory: join(workspace, 'nope'), name: 'a' },
+    body,
+  );
+  assert.equal(gone.status, 404);
+  assert.equal(existsSync(join(workspace, 'nope')), false);
+});
+
+test('upload.file works for extra writable roots and cold sessions', async () => {
+  const extra = join(base, 'extra');
+  mkdirSync(extra);
+  const res = await upload(
+    realHost('workspace-write', { extraRoots: [extra] }).save,
+    { directory: extra, name: 'in-extra' },
+    'x',
+  );
+  assert.equal(res.status, 201);
+  const dir = uploadDir('up-cold');
+  assert.equal(
+    (await upload(realHost().save, { directory: dir, name: 'c', sessionId: 'cold' }, 'x')).status,
+    201,
+  );
+  assert.equal(
+    (await upload(realHost().save, { directory: dir, name: 'd', sessionId: 'unknown' }, 'x'))
+      .status,
+    404,
+  );
+});
+
+test('upload.file rejects bad names, bodies and headers before touching anything', async () => {
+  const dir = uploadDir('up-bad');
+  const host = realHost();
+  const post = (query: Record<string, string>, headers?: Record<string, string | null>) =>
+    upload(host.save, { directory: dir, ...query }, 'x', headers);
+  for (const name of ['', '.', '..', 'a/b', '../x', 'a\\b', ' a', 'a\u0000b', 'x'.repeat(1025)])
+    assert.equal((await post({ name })).status, 400, JSON.stringify(name));
+  assert.equal((await post({})).status, 400);
+  assert.equal((await post({ name: 'a', directory: 'relative' })).status, 400);
+  assert.equal((await post({ name: 'a', sessionId: '' })).status, 400);
+  assert.equal((await post({ name: 'a' }, { 'content-type': 'text/plain' })).status, 415);
+  assert.equal((await post({ name: 'a' }, { 'content-length': null })).status, 411);
+  assert.equal(
+    (await post({ name: 'a' }, { 'content-length': String(UPLOAD_LIMITS.maxBytes + 1) })).status,
+    413,
+  );
+  const get = await handleUpload(host.save, new Request('http://x/api/upload.file'));
+  assert.equal(get.status, 405);
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test('upload.file: a body longer than it declared is refused and leaves nothing', async () => {
+  const dir = uploadDir('up-lie');
+  const host = realHost();
+  const saved = UPLOAD_LIMITS.maxBytes;
+  UPLOAD_LIMITS.maxBytes = 1000;
+  try {
+    const res = await upload(host.save, { directory: dir, name: 'big' }, new Uint8Array(5000), {
+      'content-length': '10',
+    });
+    assert.equal(res.status, 413);
+  } finally {
+    UPLOAD_LIMITS.maxBytes = saved;
+  }
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test('upload.file: a cancelled upload leaves no partial file', async () => {
+  const dir = uploadDir('up-cancel');
+  const cancel = new AbortController();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(1000));
+      setTimeout(() => cancel.abort(), 50);
+    },
+  });
+  const res = await handleUpload(
+    realHost().save,
+    new Request(
+      `http://x/api/upload.file?${new URLSearchParams({ sessionId: 'sess', directory: dir, name: 'half' })}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream', 'content-length': '5000' },
+        body: stream,
+        duplex: 'half',
+        signal: cancel.signal,
+      } as RequestInit,
+    ),
+  );
+  assert.equal(res.status, 499);
+  assert.deepEqual(readdirSync(dir), []);
+});
+
+test('upload.file: a folder swapped for a symlink while the bytes arrive is caught', async () => {
+  const dir = uploadDir('up-swap');
+  const outsideBefore = readdirSync(outside);
+  const parked = join(workspace, 'up-swap-real');
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+      c.enqueue(new TextEncoder().encode('part one'));
+    },
+  });
+  const pending = handleUpload(
+    realHost().save,
+    new Request(
+      `http://x/api/upload.file?${new URLSearchParams({ sessionId: 'sess', directory: dir, name: 'swapped' })}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream', 'content-length': '16' },
+        body: stream,
+        duplex: 'half',
+      } as RequestInit,
+    ),
+  );
+  await new Promise((r) => setTimeout(r, 100));
+  // The temporary file is open inside `dir`: park the folder, put a link to the outside in its place.
+  renameSync(dir, parked);
+  symlinkSync(outside, dir);
+  controller.enqueue(new TextEncoder().encode('part two'));
+  controller.close();
+  const res = await pending;
+  assert.equal(res.status, 403);
+  assert.deepEqual(readdirSync(outside), outsideBefore);
+  assert.equal(existsSync(join(parked, 'swapped')), false);
+  assert.equal(existsSync(join(outside, 'swapped')), false);
+  // The only trace: the hidden temporary file, in the folder it was made in. Cleaning
+  // up by path would now go through the symlink, which is what the fence refuses.
+  assert.deepEqual(
+    stray(parked, []).map((name) => /^\.dlf-upload-.*\.part$/.test(name)),
+    [true],
+  );
 });

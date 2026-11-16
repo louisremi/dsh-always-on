@@ -119,6 +119,8 @@ export function mutationStatus(error: unknown): number {
 export interface RouteSpec<C> {
   path: string;
   methods: string[];
+  /** `buffered` (the default) reads the body whole, up to the Harness's limit; `streaming` hands it over as a stream. */
+  requestBody?: 'buffered' | 'streaming';
   handle: (ctx: C, request: Request) => Promise<Response>;
 }
 
@@ -129,18 +131,22 @@ export interface RouteSpec<C> {
  */
 export function registerRoute<C>(
   ctx: C & { connection: ConnectionService },
-  { path, methods, handle }: RouteSpec<C>,
+  { path, methods, requestBody = 'buffered', handle }: RouteSpec<C>,
 ): () => Promise<void> {
   const lifetime = new AbortController();
   const pending = new Set<Promise<unknown>>();
   const unregister = ctx.connection.fetch.register({
     path,
     methods,
-    requestBody: 'buffered',
+    requestBody,
     fetch: (request) => {
       const task = handle(
         ctx,
-        new Request(request, { signal: AbortSignal.any([request.signal, lifetime.signal]) }),
+        new Request(request, {
+          signal: AbortSignal.any([request.signal, lifetime.signal]),
+          // A streamed body is forwarded as it is, so the copy must say so too.
+          ...(requestBody === 'streaming' ? { duplex: 'half' } : {}),
+        } as RequestInit),
       );
       pending.add(task);
       const done = () => {
