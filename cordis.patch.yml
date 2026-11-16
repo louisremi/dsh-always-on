@@ -1,3 +1,23 @@
+# dsh-always-on's bundle layer, applied after dsh-base and dsh-web-app.
+
 - insert:
     - id: dsh-always-on
       name: "@louisremi/dsh-always-on"
+
+# A Harness in a container has no desktop the user can see: the Host may have
+# an X display (a virtual one for a headless browser), but anything it opened
+# there would never reach the user's screen. Tell the Harness so, instead of
+# offering "Show in folder", "Open in default application" and file-type
+# application lists that open nowhere. The menu entries stay, disabled.
+# A patch replaces the row's whole `config`: nativeOpen is the only key the
+# base row sets (none; listWorkSliceMs keeps its default).
+- id: session-controller
+  config:
+    nativeOpen: false
+
+# The "Open in <app>" catalog (editors, terminals, file managers) launches
+# desktop applications on the Host: same problem. Without it, the session
+# menus' "Open in" submenu and the workspace "Show in folder" entry have no
+# applications to offer. Its browser half stays, and simply finds none.
+- id: open-in-app
+  disabled: true

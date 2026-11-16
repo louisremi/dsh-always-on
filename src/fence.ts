@@ -24,8 +24,10 @@
  */
 import { lstat, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { SandboxPolicy } from './context.ts';
+import { errorCode } from './errors.ts';
+import { isUnder } from './paths.ts';
 
 /** Thrown when a path is outside what the session may change. */
 export class FenceError extends Error {
@@ -56,18 +58,13 @@ export async function canonicalPath(path: string): Promise<string> {
     try {
       return join(await realpath(at), ...missing.reverse());
     } catch (error) {
-      if ((error as { code?: string }).code !== 'ENOENT') throw error;
+      if (errorCode(error) !== 'ENOENT') throw error;
       const parent = dirname(at);
       if (parent === at) throw error;
       missing.push(basename(at));
       at = parent;
     }
   }
-}
-
-function isUnder(path: string, root: string): boolean {
-  const rel = relative(root, path);
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /** Canonical workspace roots of a policy; roots that do not exist match nothing. */
@@ -139,6 +136,17 @@ export async function landedInside(policy: SandboxPolicy, path: string): Promise
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether the folder at `path` holds a workspace root or extra writable root
+ * of the policy (strictly inside it). Moving such a folder would take a root
+ * the session works in along with it, so rename and delete refuse it in every
+ * mode.
+ */
+export async function holdsWritableRoot(policy: SandboxPolicy, path: string): Promise<boolean> {
+  const target = await canonicalPath(path);
+  return (await workspaceRoots(policy)).some((root) => root !== target && isUnder(root, target));
 }
 
 /** {@link mayWrite}, throwing {@link FenceError} on refusal. */

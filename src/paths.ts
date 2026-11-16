@@ -1,6 +1,15 @@
-/** Host-path helpers shared by the mutation routes. */
+/** Host-path helpers shared by the routes. */
 import { rmdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute, relative, sep } from 'node:path';
+
+/** What a route acts on: a regular file or a real folder. */
+export type EntryKind = 'file' | 'folder';
+
+/** Whether `path` is `root` or inside it (both absolute, compared as written). */
+export function isUnder(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
 
 /** Longest name (with any sub-directories) a create or rename accepts. */
 const MAX_NAME_LENGTH = 1024;
@@ -25,17 +34,17 @@ export function nameSegments(name: unknown): string[] | undefined {
 
 /**
  * Remove the directories a `mkdir(deepest, { recursive: true })` created,
- * deepest first, up to and including `first` (its return value). Best effort
+ * deepest first, up to and including `firstCreated` (its return value). Best effort
  * and non-recursive: only empty directories go.
  */
-export async function undoMkdir(deepest: string, first: string | undefined): Promise<void> {
-  if (first === undefined) return;
+export async function undoMkdir(deepest: string, firstCreated: string | undefined): Promise<void> {
+  if (firstCreated === undefined) return;
   for (let dir = deepest; ; dir = dirname(dir)) {
     try {
       await rmdir(dir);
     } catch {
       return;
     }
-    if (dir === first || dirname(dir) === dir) return;
+    if (dir === firstCreated || dirname(dir) === dir) return;
   }
 }
