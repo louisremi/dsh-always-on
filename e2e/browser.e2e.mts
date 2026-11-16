@@ -276,7 +276,11 @@ const server = http.createServer(async (req, res) => {
     return send(out.status, await out.text(), 'application/json');
   }
   if (url.pathname === '/api/upload.file') {
-    // Streamed, like the Harness hands the body over.
+    // Streamed, like the Harness hands the body over; a client that hangs up aborts it.
+    const abort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abort.abort();
+    });
     const headers = new Headers();
     for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
     const out = await handleUpload(hostCtx, {
@@ -284,7 +288,7 @@ const server = http.createServer(async (req, res) => {
       url: `http://x${url.pathname}${url.search}`,
       headers,
       body: Readable.toWeb(req),
-      signal: new AbortController().signal,
+      signal: abort.signal,
     } as unknown as Request);
     return send(out.status, await out.text(), 'application/json');
   }
@@ -665,7 +669,7 @@ await check(
     ]);
     await second.setFiles([{ name: 'x.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
     await page.waitForSelector('[data-dlf-upload=done]');
-    assert.match(await page.textContent('[data-dlf-upload]'), /upload\.noFolder/);
+    assert.match(await page.textContent('[data-dlf-upload]'), /create\.noFolder/);
     assert.throws(() => statSync(gone));
   },
 );
@@ -695,7 +699,9 @@ await check('Upload: Cancel stops the running upload and leaves no partial file'
   await page.click('[data-dlf-upload-cancel]');
   await page.waitForSelector('[data-dlf-upload=done]');
   assert.match(await page.textContent('[data-dlf-upload]'), /upload\.cancelled/);
-  await new Promise((r) => setTimeout(r, 300));
+  // The server undoes the partial temporary file: poll instead of guessing a delay.
+  for (let i = 0; i < 60 && readdirSync(target).length > 0; i++)
+    await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(readdirSync(target), []);
 });
 

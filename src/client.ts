@@ -178,8 +178,6 @@ window.__ModuleLoader__.load({
       'upload.failed': '{n} failed. Try again.',
       'upload.denied': '{n} refused: this folder is not writable.',
       'upload.cancelled': 'Upload stopped. {uploaded} of {total} files were uploaded.',
-      'upload.noFolder': 'The folder no longer exists.',
-      'upload.menuFailed': 'Could not start the upload. Try again.',
       'menu.rename': 'Rename or move…',
       'menu.delete': 'Delete…',
       'menu.downloadZip': 'Download as .zip',
@@ -273,8 +271,6 @@ window.__ModuleLoader__.load({
       'upload.failed': '{n} 个失败，请重试。',
       'upload.denied': '{n} 个被拒绝：此文件夹不可写。',
       'upload.cancelled': '上传已停止，已上传 {uploaded}/{total} 个文件。',
-      'upload.noFolder': '该文件夹已不存在。',
-      'upload.menuFailed': '无法开始上传，请重试',
       'menu.rename': '重命名或移动…',
       'menu.delete': '删除…',
       'menu.downloadZip': '下载为 .zip',
@@ -897,22 +893,34 @@ span:has(+[data-presented-files-row]){display:none}
       fatal?: string | undefined;
       abort: () => void;
     }
-    const uploadUi = {
-      state: undefined as UploadState | undefined,
-      listeners: new Set<() => void>(),
-      revision: 0,
-      set(state: UploadState | undefined) {
-        uploadUi.state = state;
-        uploadUi.revision += 1;
-        for (const listener of uploadUi.listeners) listener();
-      },
-      subscribe: (listener: () => void) => {
-        uploadUi.listeners.add(listener);
-        return () => {
-          uploadUi.listeners.delete(listener);
+    const uploadUi = uiStore<{ upload: UploadState | undefined }>({ upload: undefined });
+
+    /** What the Host said about one file, or why it never answered. */
+    type UploadResult =
+      | { kind: 'http'; status: number; error?: string | undefined }
+      | { kind: 'network' }
+      | { kind: 'aborted' };
+
+    /** What one file's answer means for the batch: a counter to bump, or the reason the rest cannot go on. */
+    function uploadOutcome(
+      result: UploadResult,
+    ): 'uploaded' | 'skipped' | 'tooLarge' | 'denied' | 'failed' | 'stopped' | { fatal: string } {
+      if (result.kind === 'aborted') return 'stopped';
+      if (result.kind === 'network') return 'failed';
+      const counted = UPLOAD_OUTCOMES[result.status];
+      if (counted !== undefined) return counted;
+      if (result.status === 404)
+        return {
+          fatal: result.error === 'session not found' ? 'mutation.noSession' : 'create.noFolder',
         };
-      },
-      snapshot: () => uploadUi.revision,
+      if (result.status === 422) return { fatal: 'mutation.unmapped' };
+      return 'failed';
+    }
+    const UPLOAD_OUTCOMES: Record<number, 'uploaded' | 'skipped' | 'tooLarge' | 'denied'> = {
+      201: 'uploaded',
+      409: 'skipped',
+      413: 'tooLarge',
+      403: 'denied',
     };
 
     /** POST one file's bytes to the Host, reporting progress; resolves with the HTTP status (0 on a network error). */
@@ -922,7 +930,7 @@ span:has(+[data-presented-files-row]){display:none}
       file: File,
       onProgress: (fraction: number) => void,
       xhr: XMLHttpRequest,
-    ): Promise<{ status: number; error?: string | undefined }> {
+    ): Promise<UploadResult> {
       return new Promise((resolve) => {
         const url = new URL(UPLOAD_ROUTE, document.baseURI);
         url.searchParams.set('sessionId', sessionId);
@@ -940,10 +948,10 @@ span:has(+[data-presented-files-row]){display:none}
           } catch {
             /* not JSON */
           }
-          resolve({ status: xhr.status, error });
+          resolve({ kind: 'http', status: xhr.status, error });
         };
-        xhr.onerror = () => resolve({ status: 0 });
-        xhr.onabort = () => resolve({ status: -1 });
+        xhr.onerror = () => resolve({ kind: 'network' });
+        xhr.onabort = () => resolve({ kind: 'aborted' });
         xhr.send(file);
       });
     }
@@ -957,7 +965,7 @@ span:has(+[data-presented-files-row]){display:none}
       if (files.length === 0) return;
       let xhr = new XMLHttpRequest();
       const state: UploadState = {
-        id: ++toastIds,
+        id: nextToastId(),
         phase: 'running',
         total: files.length,
         index: 1,
@@ -974,7 +982,7 @@ span:has(+[data-presented-files-row]){display:none}
           xhr.abort();
         },
       };
-      const publish = () => uploadUi.set({ ...state });
+      const publish = () => uploadUi.set({ upload: { ...state } });
       publish();
       for (const [i, file] of files.entries()) {
         if (state.cancelled) break;
@@ -1000,19 +1008,14 @@ span:has(+[data-presented-files-row]){display:none}
           },
           xhr,
         );
-        if (result.status === 201) state.uploaded += 1;
-        else if (result.status === -1) break;
-        else if (result.status === 409) state.skipped += 1;
-        else if (result.status === 413) state.tooLarge += 1;
-        else if (result.status === 403) state.denied += 1;
-        else if (result.status === 404) {
-          state.fatal =
-            result.error === 'session not found' ? 'mutation.noSession' : 'upload.noFolder';
+        const outcome = uploadOutcome(result);
+        if (outcome === 'stopped') break;
+        if (typeof outcome === 'object') {
+          state.fatal = outcome.fatal;
           break;
-        } else if (result.status === 422) {
-          state.fatal = 'mutation.unmapped';
-          break;
-        } else state.failed += 1;
+        }
+        if (outcome === 'uploaded') state.uploaded += 1;
+        else state[outcome] += 1;
       }
       state.phase = 'done';
       publish();
@@ -1043,12 +1046,9 @@ span:has(+[data-presented-files-row]){display:none}
         const clean =
           state.skipped + state.tooLarge + state.denied + state.failed === 0 &&
           state.fatal === undefined;
-        const timer = setTimeout(
-          () => {
-            if (uploadUi.state?.id === state.id) uploadUi.set(undefined);
-          },
-          clean ? RESTORE_MS : 4 * ERROR_MS,
-        );
+        const timer = setTimeout(() => {
+          if (uploadUi.state.upload?.id === state.id) uploadUi.set({ upload: undefined });
+        }, toastMs(clean));
         return () => clearTimeout(timer);
       }, [
         running,
@@ -1111,7 +1111,7 @@ span:has(+[data-presented-files-row]){display:none}
               type: 'button',
               className: 'dlf-toast-close',
               'aria-label': t('toast.dismiss'),
-              onClick: () => uploadUi.set(undefined),
+              onClick: () => uploadUi.set({ upload: undefined }),
             },
             '×',
           ),
@@ -1303,26 +1303,43 @@ span:has(+[data-presented-files-row]){display:none}
       /** Tabs the delete closed, reopened by a restore. */
       reopen: string[];
     }
-    const entryUi = {
-      dialog: undefined as EntryDialog,
-      toast: undefined as EntryToast | undefined,
-      listeners: new Set<() => void>(),
-      revision: 0,
-      set(change: { dialog?: EntryDialog; toast?: EntryToast | undefined }) {
-        if ('dialog' in change) entryUi.dialog = change.dialog;
-        if ('toast' in change) entryUi.toast = change.toast;
-        entryUi.revision += 1;
-        for (const listener of entryUi.listeners) listener();
-      },
-      subscribe: (listener: () => void) => {
-        entryUi.listeners.add(listener);
-        return () => {
-          entryUi.listeners.delete(listener);
-        };
-      },
-      snapshot: () => entryUi.revision,
-    };
+    /**
+     * An overlay's state, watched by the one overlay that draws it: `set`
+     * merges a change, and subscribers re-read the whole snapshot.
+     */
+    function uiStore<T extends object>(initial: T) {
+      const store = {
+        state: initial,
+        listeners: new Set<() => void>(),
+        revision: 0,
+        set(change: Partial<T>) {
+          store.state = { ...store.state, ...change };
+          store.revision += 1;
+          for (const listener of store.listeners) listener();
+        },
+        subscribe: (listener: () => void) => {
+          store.listeners.add(listener);
+          return () => {
+            store.listeners.delete(listener);
+          };
+        },
+        snapshot: () => store.revision,
+      };
+      return store;
+    }
+    /** One id per toast, so a newer one replaces an older one. */
     let toastIds = 0;
+    const nextToastId = () => {
+      toastIds += 1;
+      return toastIds;
+    };
+    /** How long a toast stays: briefly when all went well, longer when something needs reading. */
+    const toastMs = (clean: boolean) => (clean ? RESTORE_MS : 4 * ERROR_MS);
+
+    const entryUi = uiStore<{ dialog: EntryDialog; toast: EntryToast | undefined }>({
+      dialog: undefined,
+      toast: undefined,
+    });
 
     /** Routes and labels that differ between files and folders. */
     const ENTRY_KINDS = {
@@ -1529,7 +1546,7 @@ span:has(+[data-presented-files-row]){display:none}
         if (held || toast.state === 'restoring') return;
         const timer = setTimeout(
           () => {
-            if (entryUi.toast?.id === toast.id) entryUi.set({ toast: undefined });
+            if (entryUi.state.toast?.id === toast.id) entryUi.set({ toast: undefined });
           },
           settled ? ERROR_MS : RESTORE_MS,
         );
@@ -1547,7 +1564,7 @@ span:has(+[data-presented-files-row]){display:none}
         } catch {
           res = { status: 0, ok: false, body: {} };
         }
-        if (entryUi.toast?.id !== toast.id) return;
+        if (entryUi.state.toast?.id !== toast.id) return;
         if (!res.ok) {
           const error =
             res.status === 409
@@ -1627,8 +1644,8 @@ span:has(+[data-presented-files-row]){display:none}
     }) {
       React.useSyncExternalStore(entryUi.subscribe, entryUi.snapshot);
       React.useSyncExternalStore(uploadUi.subscribe, uploadUi.snapshot);
-      const { dialog, toast } = entryUi;
-      const upload = uploadUi.state;
+      const { dialog, toast } = entryUi.state;
+      const upload = uploadUi.state.upload;
       return h(
         React.Fragment,
         null,
@@ -2853,7 +2870,6 @@ span:has(+[data-presented-files-row]){display:none}
                       label: t('upload.menu'),
                       icon: { key: 'always-on.upload' },
                       disabled: !target.absolutePath.startsWith('/'),
-                      failureLabel: t('upload.menuFailed'),
                       run: () => pickAndUpload(sessionId, target.absolutePath),
                     },
                     ...entryActions(target),

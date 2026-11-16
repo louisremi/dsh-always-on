@@ -146,7 +146,7 @@ export function registerRoute<C>(
           signal: AbortSignal.any([request.signal, lifetime.signal]),
           // A streamed body is forwarded as it is, so the copy must say so too.
           ...(requestBody === 'streaming' ? { duplex: 'half' } : {}),
-        } as RequestInit),
+        } as RequestInit & { duplex: 'half' }),
       );
       pending.add(task);
       const done = () => {

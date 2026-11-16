@@ -1,10 +1,11 @@
 import { mkdir } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { SaveContext } from './context.ts';
 import { assertWritable, FenceError, landedInside } from './fence.ts';
 import { failureStatus, failWith, handlePost, json, jsonObject, mutationStatus } from './http.ts';
-import { nameSegments, undoMkdir } from './paths.ts';
+import { undoMkdir } from './paths.ts';
 import { policyFor } from './session-policy.ts';
+import { parseTarget, type Target } from './target.ts';
 
 export const CREATE_FILE_PATH = '/api/create.file';
 export const CREATE_FOLDER_PATH = '/api/create.folder';
@@ -15,19 +16,10 @@ const fail = failWith(
 );
 
 /** The request body every create shares; returns the fields or a Response. */
-async function parseCreate(
-  request: Request,
-): Promise<{ sessionId: string; directory: string; segments: string[] } | Response> {
+async function parseCreate(request: Request): Promise<Target | Response> {
   const body = await jsonObject(request, fail);
   if (body instanceof Response) return body;
-  const { sessionId, directory, name } = body;
-  if (typeof sessionId !== 'string' || sessionId.length === 0)
-    return fail(400, 'sessionId required');
-  if (typeof directory !== 'string' || !isAbsolute(directory) || directory.includes('\0'))
-    return fail(400, 'absolute directory required');
-  const segments = nameSegments(name);
-  if (segments === undefined) return fail(400, 'invalid name');
-  return { sessionId, directory, segments };
+  return parseTarget(body, fail);
 }
 
 /**

@@ -28,6 +28,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { after, test } from 'node:test';
 import { inflateRawSync } from 'node:zlib';
 import { Context } from '@deepseek-ai/cordis';
@@ -49,7 +51,13 @@ import { FOLDER_LIMITS, handleDownloadFolder, handleFolderSummary } from '../src
 import { undoMkdir } from '../src/paths.ts';
 import { handleSave } from '../src/save-route.ts';
 import { purgeTrash, slotName, slotTime, trashRelation, trashRootFor } from '../src/trash.ts';
-import { copyNoReplace, handleUpload, placeNoReplace, UPLOAD_LIMITS } from '../src/upload-route.ts';
+import {
+  copyNoReplace,
+  handleUpload,
+  limitBytes,
+  MAX_UPLOAD_BYTES,
+  placeNoReplace,
+} from '../src/upload-route.ts';
 import { walkFolder } from '../src/walk.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
@@ -1196,7 +1204,7 @@ test('upload.file rejects bad names, bodies and headers before touching anything
   assert.equal((await post({ name: 'a' }, { 'content-type': 'text/plain' })).status, 415);
   assert.equal((await post({ name: 'a' }, { 'content-length': null })).status, 411);
   assert.equal(
-    (await post({ name: 'a' }, { 'content-length': String(UPLOAD_LIMITS.maxBytes + 1) })).status,
+    (await post({ name: 'a' }, { 'content-length': String(MAX_UPLOAD_BYTES + 1) })).status,
     413,
   );
   const get = await handleUpload(host.save, new Request('http://x/api/upload.file'));
@@ -1204,20 +1212,39 @@ test('upload.file rejects bad names, bodies and headers before touching anything
   assert.deepEqual(readdirSync(dir), []);
 });
 
-test('upload.file: a body longer than it declared is refused and leaves nothing', async () => {
+test('upload: the byte counter stops a body past the limit (a lying Content-Length)', async () => {
+  // The real limit is 2 GiB: the guard is exercised directly with a small one.
+  await assert.rejects(
+    pipeline(
+      Readable.from([Buffer.alloc(600), Buffer.alloc(600)]),
+      limitBytes(1000),
+      async (source) => {
+        for await (const _chunk of source) {
+          /* drain */
+        }
+      },
+    ),
+    (error: NodeJS.ErrnoException) => error.code === 'EFBIG',
+  );
+  // At the limit is fine: only past it is refused.
+  await pipeline(Readable.from([Buffer.alloc(1000)]), limitBytes(1000), async (source) => {
+    for await (const _chunk of source) {
+      /* drain */
+    }
+  });
+  // A body longer than it declared, but within the limit, is simply stored whole.
   const dir = uploadDir('up-lie');
-  const host = realHost();
-  const saved = UPLOAD_LIMITS.maxBytes;
-  UPLOAD_LIMITS.maxBytes = 1000;
-  try {
-    const res = await upload(host.save, { directory: dir, name: 'big' }, new Uint8Array(5000), {
+  const res = await upload(
+    realHost().save,
+    { directory: dir, name: 'under' },
+    new Uint8Array(5000),
+    {
       'content-length': '10',
-    });
-    assert.equal(res.status, 413);
-  } finally {
-    UPLOAD_LIMITS.maxBytes = saved;
-  }
-  assert.deepEqual(readdirSync(dir), []);
+    },
+  );
+  assert.equal(res.status, 201);
+  assert.equal(statSync(join(dir, 'under')).size, 5000);
+  assert.deepEqual(stray(dir, ['under']), []);
 });
 
 test('upload.file: a cancelled upload leaves no partial file', async () => {

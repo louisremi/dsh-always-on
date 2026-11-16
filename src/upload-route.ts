@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { constants, createWriteStream } from 'node:fs';
 import { copyFile, link, lstat, stat, unlink } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
@@ -9,13 +9,13 @@ import type { SaveContext } from './context.ts';
 import { codedError, errorCode } from './errors.ts';
 import { assertWritable, FenceError, landedInside } from './fence.ts';
 import { failWith, handlePost, json, mutationStatus } from './http.ts';
-import { nameSegments } from './paths.ts';
 import { policyFor } from './session-policy.ts';
+import { parseTarget } from './target.ts';
 
 export const UPLOAD_FILE_PATH = '/api/upload.file';
 
-/** Largest file one upload accepts. The browser checks it too, before sending. */
-export const UPLOAD_LIMITS = { maxBytes: 2 * 1024 ** 3 };
+/** Largest file one upload accepts; the browser checks it too, before sending (test/limits.test.ts keeps them in step). */
+export const MAX_UPLOAD_BYTES = 2 * 1024 ** 3;
 
 const fail = failWith(
   {
@@ -36,7 +36,7 @@ function uploadStatus(error: unknown): number {
 }
 
 /** Passes bytes through, failing with `EFBIG` past `limit` (a lying Content-Length). */
-function limitBytes(limit: number): Transform {
+export function limitBytes(limit: number): Transform {
   let seen = 0;
   return new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -94,31 +94,34 @@ export async function placeNoReplace(temp: string, hostPath: string): Promise<vo
 export function handleUpload(ctx: SaveContext, request: Request): Promise<Response> {
   return handlePost(request, fail, uploadStatus, async () => {
     const { searchParams } = new URL(request.url);
-    const sessionId = searchParams.get('sessionId');
-    const directory = searchParams.get('directory');
-    const segments = nameSegments(searchParams.get('name'));
-    if (sessionId === null || sessionId.length === 0) return fail(400, 'sessionId required');
-    if (directory === null || !isAbsolute(directory) || directory.includes('\0'))
-      return fail(400, 'absolute directory required');
-    if (segments === undefined || segments.length !== 1) return fail(400, 'invalid name');
+    const input = parseTarget(
+      {
+        sessionId: searchParams.get('sessionId') ?? undefined,
+        directory: searchParams.get('directory') ?? undefined,
+        name: searchParams.get('name') ?? undefined,
+      },
+      fail,
+      { singleName: true },
+    );
+    if (input instanceof Response) return input;
     if (
       request.headers.get('content-type')?.split(';', 1)[0]?.trim() !== 'application/octet-stream'
     )
       return fail(415);
     const declared = request.headers.get('content-length');
     if (declared === null) return fail(411);
-    if (!(Number(declared) <= UPLOAD_LIMITS.maxBytes)) return fail(413);
+    if (!(Number(declared) <= MAX_UPLOAD_BYTES)) return fail(413);
     if (request.body === null) return fail(400, 'body required');
 
     const { signal } = request;
-    const policy = await policyFor(ctx, sessionId, signal);
+    const policy = await policyFor(ctx, input.sessionId, signal);
     if (policy === undefined) return fail(404, 'session not found');
 
-    const hostPath = join(directory, segments[0] as string);
+    const hostPath = join(input.directory, input.segments[0] as string);
     if (ctx.fs.processPathFromHostPath(hostPath) === undefined)
       return fail(422, 'path has no verified Host path');
     await assertWritable(policy, hostPath);
-    if (!(await stat(directory)).isDirectory()) return fail(404, 'folder not found');
+    if (!(await stat(input.directory)).isDirectory()) return fail(404, 'folder not found');
     try {
       await lstat(hostPath);
       return fail(409);
@@ -126,12 +129,12 @@ export function handleUpload(ctx: SaveContext, request: Request): Promise<Respon
       if (errorCode(error) !== 'ENOENT') throw error;
     }
 
-    const temp = join(directory, `.dlf-upload-${randomUUID()}.part`);
+    const temp = join(input.directory, `.dlf-upload-${randomUUID()}.part`);
     try {
       await pipeline(
         // The web stream's type differs between lib.dom and node:stream/web only nominally.
         Readable.fromWeb(request.body as WebReadableStream),
-        limitBytes(UPLOAD_LIMITS.maxBytes),
+        limitBytes(MAX_UPLOAD_BYTES),
         createWriteStream(temp, { flags: 'wx', mode: 0o666 }),
         { signal },
       );
