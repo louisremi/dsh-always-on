@@ -23,9 +23,21 @@ Installing from a git URL builds the plugin on install (`prepare` runs `npm run 
 
 Nothing to configure.
 
-**Download.** The download button appears wherever the folder button used to be: file cards under an agent reply (`present`) and in the changed-files review tab, the toolbar of a file open in the sidebar preview, and the empty state of a file the preview can't render.
+### Download
 
-**Show files.** The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
+The download button appears wherever the folder button used to be: file cards under an agent reply (`present`) and in the changed-files review tab, the toolbar of a file open in the sidebar preview, and the empty state of a file the preview can't render.
+
+![Download buttons on the file cards of an agent reply](docs/screenshots/download.png)
+
+### Show files
+
+The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
+
+![The Show files button in the session header, and the sidebar Files tab it opens](docs/screenshots/show-files.png)
+
+### Files and folders
+
+![Right-click menu on a folder in the Files tab, with Rename or move, Delete and Download as .zip, and the New file / New folder buttons](docs/screenshots/files-menu.png)
 
 **New file.** In the sidebar's Files tab, the new-file button (next to Reload) asks for a name and creates an empty file in the folder the tab shows, then opens it in the editor. Type `notes/todo.md` to create missing folders on the way. It never overwrites anything: if the name is taken, it says so. It follows the session's sandbox mode like saving does, and is stricter in one way: in workspace-write mode it only creates inside the workspace (and any extra writable directories), never in temp areas.
 
@@ -36,16 +48,29 @@ Nothing to configure.
 - **Rename or move** asks for a new name, with the stem pre-selected. A plain name renames in place, `folder/name` moves it into a (possibly new) sub-folder, and an absolute path moves it there. It never replaces anything: if the name is taken (even by an empty folder), it says so. A folder can't be moved into itself. Open tabs follow the file, or the files of the folder, to the new place.
 - **Delete** asks for confirmation (for a folder, with what is inside: "12 files, 3 folders (48 KiB)") and moves the file or folder to the trash, `.tmp/deleted/` in the workspace. If the folder holds a mounted volume, the dialog names it, since everything on it goes to the trash too. Its tabs are closed.
 - **Restore.** For 10 seconds after a delete, a **Restore deleted file/folder** button at the bottom of the page puts it back where it was and reopens its tabs. Hovering it pauses the countdown, and **Dismiss** closes it. Only the last deletion can be restored this way. Older ones stay in `.tmp/deleted/<date>-<id>/` for 30 days, then they are removed for good.
+
+  ![The Restore deleted folder bar shown for 10 seconds after a delete](docs/screenshots/restore-bar.png)
+
 - Both are refused while an editor tab has unsaved changes to the file, or to any file in the folder. Both follow the sandbox mode like New folder. The workspace folder itself can't be renamed or deleted.
 - They act on regular files and real folders. A symlink is never followed. A folder's symlinks are moved as links; what they point to is never touched.
 
 **Download as .zip.** The same menu on a folder (including the workspace folder, from the Files tab header) downloads it as one `.zip`, streamed as it is built. Symlinks and special files are left out and listed in a `DOWNLOAD-SKIPPED.txt` inside the archive. Up to 20,000 entries and 2 GiB.
 
-**Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
+### Edit
+
+Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download).
+
+![Edit and Download buttons in the toolbar of a file open in the sidebar preview](docs/screenshots/preview-actions.png)
+
+The file opens in its own editor tab:
+
+![The in-sidebar Monaco editor with unsaved changes](docs/screenshots/editor.png)
 
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
 - The header shows the file's size and when it was last modified, refreshed after each save.
 - If the file changed on disk after you opened it, saving is refused and you choose **Reload from disk**, **Overwrite**, or **Keep editing**. Nothing is overwritten silently.
+
+  ![Conflict banner shown when the file changed on disk after it was opened](docs/screenshots/conflict.png)
 - Closing a tab (or the browser page) with unsaved changes asks for confirmation.
 - Line endings (LF/CRLF) and a leading UTF-8 byte-order mark are preserved.
 - Text files up to 1 MiB. Binary files and invalid UTF-8 are refused, not corrupted.
