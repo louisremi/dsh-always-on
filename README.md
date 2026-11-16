@@ -48,6 +48,9 @@ The workspace folder button in the session header becomes a single **Show files*
 - **Rename or move** asks for a new name, with the stem pre-selected. A plain name renames in place, `folder/name` moves it into a (possibly new) sub-folder, and an absolute path moves it there. It never replaces anything: if the name is taken (even by an empty folder), it says so. A folder can't be moved into itself. Open tabs follow the file, or the files of the folder, to the new place.
 - **Delete** asks for confirmation (for a folder, with what is inside: "12 files, 3 folders (48 KiB)") and moves the file or folder to the trash, `.tmp/deleted/` in the workspace. If the folder holds a mounted volume, the dialog names it, since everything on it goes to the trash too. Its tabs are closed.
 - **Restore.** For 10 seconds after a delete, a **Restore deleted file/folder** button at the bottom of the page puts it back where it was and reopens its tabs. Hovering it pauses the countdown, and **Dismiss** closes it. Only the last deletion can be restored this way. Older ones stay in `.tmp/deleted/<date>-<id>/` for 30 days, then they are removed for good.
+
+  ![The Restore deleted folder bar shown for 10 seconds after a delete](docs/screenshots/restore-bar.png)
+
 - Both are refused while an editor tab has unsaved changes to the file, or to any file in the folder. Both follow the sandbox mode like New folder. The workspace folder itself can't be renamed or deleted.
 - They act on regular files and real folders. A symlink is never followed. A folder's symlinks are moved as links; what they point to is never touched.
 
