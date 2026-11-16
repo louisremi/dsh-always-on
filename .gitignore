@@ -11,3 +11,6 @@ test/.fixtures/
 # sessions. Re-install per workspace; never commit.
 .scratch/
 .agents/
+
+# Scratch space for screenshots, scratch Harness profile, etc.
+.tmp/

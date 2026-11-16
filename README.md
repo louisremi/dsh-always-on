@@ -22,9 +22,19 @@ Installing from a git URL builds the plugin on install (`prepare` runs `npm run 
 
 Nothing to configure.
 
-**Download.** The download button appears wherever the folder button used to be: file cards under an agent reply (`present`) and in the changed-files review tab, the toolbar of a file open in the sidebar preview, and the empty state of a file the preview can't render.
+### Download
 
-**Show files.** The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
+The download button appears wherever the folder button used to be: file cards under an agent reply (`present`) and in the changed-files review tab, the toolbar of a file open in the sidebar preview, and the empty state of a file the preview can't render.
+
+![Download buttons on the file cards of an agent reply](docs/screenshots/download.png)
+
+### Show files
+
+The workspace folder button in the session header becomes a single **Show files** button. It opens (or focuses) the sidebar's Files tab. Inside that tab the button is hidden, since it would do nothing.
+
+![The Show files button in the session header, and the sidebar Files tab it opens](docs/screenshots/show-files.png)
+
+### Files and folders
 
 **New file.** In the sidebar's Files tab, the new-file button (next to Reload) asks for a name and creates an empty file in the folder the tab shows, then opens it in the editor. Type `notes/todo.md` to create missing folders on the way. It never overwrites anything: if the name is taken, it says so. It follows the session's sandbox mode like saving does, and is stricter in one way: in workspace-write mode it only creates inside the workspace (and any extra writable directories), never in temp areas.
 
@@ -39,10 +49,21 @@ Nothing to configure.
 
 **Download as .zip.** The same menu on a folder (including the workspace folder, from the Files tab header) downloads it as one `.zip`, streamed as it is built. Symlinks and special files are left out and listed in a `DOWNLOAD-SKIPPED.txt` inside the archive. Up to 20,000 entries and 2 GiB.
 
-**Edit.** Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download). The file opens in its own editor tab:
+### Edit
+
+Open a text file in the sidebar preview and press **Edit** (pencil icon, next to Download).
+
+![Edit and Download buttons in the toolbar of a file open in the sidebar preview](docs/screenshots/preview-actions.png)
+
+The file opens in its own editor tab:
+
+![The in-sidebar Monaco editor with unsaved changes](docs/screenshots/editor.png)
+
 - `Ctrl/Cmd+S` or the **Save** button writes the file; a dot on the tab and filename marks unsaved changes.
 - The header shows the file's size and when it was last modified, refreshed after each save.
 - If the file changed on disk after you opened it, saving is refused and you choose **Reload from disk**, **Overwrite**, or **Keep editing**. Nothing is overwritten silently.
+
+  ![Conflict banner shown when the file changed on disk after it was opened](docs/screenshots/conflict.png)
 - Closing a tab (or the browser page) with unsaved changes asks for confirmation.
 - Line endings (LF/CRLF) and a leading UTF-8 byte-order mark are preserved.
 - Text files up to 1 MiB. Binary files and invalid UTF-8 are refused, not corrupted.
