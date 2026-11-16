@@ -37,6 +37,8 @@ The workspace folder button in the session header becomes a single **Show files*
 
 ### Files and folders
 
+![Right-click menu on a folder in the Files tab, with Rename or move, Delete and Download as .zip, and the New file / New folder buttons](docs/screenshots/files-menu.png)
+
 **New file.** In the sidebar's Files tab, the new-file button (next to Reload) asks for a name and creates an empty file in the folder the tab shows, then opens it in the editor. Type `notes/todo.md` to create missing folders on the way. It never overwrites anything: if the name is taken, it says so. It follows the session's sandbox mode like saving does, and is stricter in one way: in workspace-write mode it only creates inside the workspace (and any extra writable directories), never in temp areas.
 
 **New folder.** The button next to New file creates a folder (`docs/drafts` creates both levels) in the folder the Files tab shows. Same rules: it never replaces anything and follows the sandbox mode. Since the Harness filesystem layer has no "make directory" operation, the plugin calls `mkdir` itself, after the same sandbox check. That is only possible when the Harness files live on the Harness host, which is also what downloads need.
