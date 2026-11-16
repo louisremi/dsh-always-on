@@ -47,20 +47,49 @@ function limitBytes(limit: number): Transform {
   });
 }
 
+/** Copy `from` to a name that must not exist yet, leaving nothing behind when the copy fails. */
+export async function copyNoReplace(from: string, to: string): Promise<void> {
+  try {
+    await copyFile(from, to, constants.COPYFILE_EXCL);
+  } catch (error) {
+    // A copy that fails midway can leave a truncated file under the final name.
+    // A name that was already taken (EEXIST) is not ours to remove.
+    if (errorCode(error) !== 'EEXIST') await unlink(to).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Give the finished temporary file its name without ever replacing anything:
+ * a hard link (atomic, and it fails when the name is taken), or — on a
+ * filesystem without hard links — an exclusive copy.
+ */
+export async function placeNoReplace(temp: string, hostPath: string): Promise<void> {
+  try {
+    await link(temp, hostPath);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EXDEV') throw error;
+    await copyNoReplace(temp, hostPath);
+  }
+}
+
 /**
  * Handle POST /api/upload.file?sessionId=…&directory=…&name=…: store the raw
  * request body (`application/octet-stream`) as a NEW file in a directory the
  * session may write to. Streamed to disk, never buffered whole.
  *
- * Never overwrites, and all or nothing: the bytes go to a hidden temporary
- * file in the target directory, which is hard-linked to the final name (that
- * fails if the name is taken) and then removed. An error or a cancelled
- * request leaves nothing behind, but for one case: when the folder is swapped
- * for a symlink mid-upload, the hidden temporary file stays in the folder it
- * was made in, since removing it by path would follow the link.
- * `name` is a single file name, not a path.
- * Like folder creation, this acts on the Host path, guarded by the plugin's
- * write fence (src/fence.ts) before and after.
+ * Never overwrites: the bytes go to a hidden temporary file in the target
+ * directory, which is given the final name only if that name is free (a hard
+ * link where the filesystem has them, else an exclusive copy) and then
+ * removed. An error or a cancelled request leaves nothing behind, with three
+ * exceptions: a crash (the process dies) can leave the temporary file, or a
+ * truncated file under the final name on the copy fallback; and when the
+ * folder is swapped for a symlink mid-upload, the hidden temporary file stays
+ * in the folder it was made in, since removing it by path would follow the
+ * link. `name` is a single file name, not a path. Like folder creation, this
+ * acts on the Host path, guarded by the plugin's write fence (src/fence.ts)
+ * before and after.
  */
 export function handleUpload(ctx: SaveContext, request: Request): Promise<Response> {
   return handlePost(request, fail, uploadStatus, async () => {
@@ -107,19 +136,19 @@ export function handleUpload(ctx: SaveContext, request: Request): Promise<Respon
         { signal },
       );
       // The directory may have been swapped for a symlink while the bytes arrived.
-      if (!(await landedInside(policy, temp)) || !(await landedInside(policy, hostPath)))
-        throw new FenceError(`"${hostPath}" landed outside the writable roots`);
+      if (!(await landedInside(policy, temp)))
+        throw new FenceError(`"${temp}" landed outside the writable roots`);
+      // A request the browser already gave up on must not leave a file behind.
+      signal.throwIfAborted();
+      await placeNoReplace(temp, hostPath);
       try {
-        await link(temp, hostPath);
+        if (!(await landedInside(policy, hostPath)))
+          throw new FenceError(`"${hostPath}" landed outside the writable roots`);
+        // The abort can arrive between the last byte and this moment: undo the name too.
+        signal.throwIfAborted();
       } catch (error) {
-        const code = errorCode(error);
-        // A filesystem without hard links: exclusive copy instead.
-        if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EXDEV') throw error;
-        await copyFile(temp, hostPath, constants.COPYFILE_EXCL);
-      }
-      if (!(await landedInside(policy, hostPath))) {
         await unlink(hostPath).catch(() => undefined);
-        throw new FenceError(`"${hostPath}" landed outside the writable roots`);
+        throw error;
       }
       return json(201, { absolutePath: hostPath, bytes: (await lstat(hostPath)).size });
     } finally {

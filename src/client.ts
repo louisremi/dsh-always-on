@@ -177,7 +177,7 @@ window.__ModuleLoader__.load({
       'upload.tooLarge': '{n} too large (2 GiB at most).',
       'upload.failed': '{n} failed. Try again.',
       'upload.denied': '{n} refused: this folder is not writable.',
-      'upload.cancelled': 'Upload cancelled. {uploaded} of {total} files were uploaded.',
+      'upload.cancelled': 'Upload stopped. {uploaded} of {total} files were uploaded.',
       'upload.noFolder': 'The folder no longer exists.',
       'upload.menuFailed': 'Could not start the upload. Try again.',
       'menu.rename': 'Rename or move…',
@@ -272,7 +272,7 @@ window.__ModuleLoader__.load({
       'upload.tooLarge': '{n} 个太大（最大 2 GiB）。',
       'upload.failed': '{n} 个失败，请重试。',
       'upload.denied': '{n} 个被拒绝：此文件夹不可写。',
-      'upload.cancelled': '上传已取消，已上传 {uploaded}/{total} 个文件。',
+      'upload.cancelled': '上传已停止，已上传 {uploaded}/{total} 个文件。',
       'upload.noFolder': '该文件夹已不存在。',
       'upload.menuFailed': '无法开始上传，请重试',
       'menu.rename': '重命名或移动…',
@@ -1069,9 +1069,9 @@ span:has(+[data-presented-files-row]){display:none}
             percent: state.percent,
           }),
         );
-      } else if (state.fatal !== undefined) {
-        lines.push(t(state.fatal));
       } else {
+        // A fatal stop ends the batch but keeps what already happened.
+        if (state.fatal !== undefined) lines.push(t(state.fatal));
         const counts = { uploaded: state.uploaded, total: state.total };
         lines.push(t(state.cancelled ? 'upload.cancelled' : 'upload.done', counts));
         for (const [key, n] of [

@@ -49,7 +49,7 @@ import { FOLDER_LIMITS, handleDownloadFolder, handleFolderSummary } from '../src
 import { undoMkdir } from '../src/paths.ts';
 import { handleSave } from '../src/save-route.ts';
 import { purgeTrash, slotName, slotTime, trashRelation, trashRootFor } from '../src/trash.ts';
-import { handleUpload, UPLOAD_LIMITS } from '../src/upload-route.ts';
+import { copyNoReplace, handleUpload, placeNoReplace, UPLOAD_LIMITS } from '../src/upload-route.ts';
 import { walkFolder } from '../src/walk.ts';
 
 // Everything lives under one fixture root: `workspace` is the session's
@@ -1286,4 +1286,26 @@ test('upload.file: a folder swapped for a symlink while the bytes arrive is caug
     stray(parked, []).map((name) => /^\.dlf-upload-.*\.part$/.test(name)),
     [true],
   );
+});
+
+test('upload: the no-hard-link fallback copies exclusively and never removes a taken name', async () => {
+  const dir = uploadDir('up-copy');
+  writeFileSync(join(dir, 'source'), 'bytes');
+  await copyNoReplace(join(dir, 'source'), join(dir, 'copy'));
+  assert.equal(readFileSync(join(dir, 'copy'), 'utf8'), 'bytes');
+  // The destination is exclusive: an existing file is neither replaced nor removed.
+  writeFileSync(join(dir, 'taken'), 'mine');
+  await assert.rejects(
+    copyNoReplace(join(dir, 'source'), join(dir, 'taken')),
+    (error: NodeJS.ErrnoException) => error.code === 'EEXIST',
+  );
+  assert.equal(readFileSync(join(dir, 'taken'), 'utf8'), 'mine');
+  // A link where the filesystem has them, and a link is refused on a taken name too.
+  await placeNoReplace(join(dir, 'source'), join(dir, 'linked'));
+  assert.equal(readFileSync(join(dir, 'linked'), 'utf8'), 'bytes');
+  await assert.rejects(
+    placeNoReplace(join(dir, 'source'), join(dir, 'linked')),
+    (error: NodeJS.ErrnoException) => error.code === 'EEXIST',
+  );
+  assert.deepEqual(stray(dir, ['source', 'copy', 'taken', 'linked']), []);
 });
