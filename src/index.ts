@@ -37,6 +37,7 @@ import {
 import { registerRoute } from './http.ts';
 import { startPurge } from './purge.ts';
 import { registerSaveRoute } from './save-route.ts';
+import { sweepUploadParts } from './sweep.ts';
 import { handleUpload, UPLOAD_FILE_PATH } from './upload-route.ts';
 
 /** Services the routes need: auth fence, filesystem, session lookups. */
@@ -83,6 +84,10 @@ export function apply(ctx: PluginContext): void {
   // long as the plugin, like the routes that report to it.
   const purge = startPurge(ctx);
   ctx.effect(() => purge.stop, 'always-on: trash purge');
+  // Uploads a crash abandoned: their temporary files go at the next start.
+  void sweepUploadParts(ctx).catch((error) => {
+    console.warn('[dsh-always-on] upload sweep failed:', error);
+  });
   const mutations = [
     [CREATE_FILE_PATH, handleCreateFile],
     [CREATE_FOLDER_PATH, handleCreateFolder],

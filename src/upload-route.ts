@@ -14,6 +14,16 @@ import { parseTarget } from './target.ts';
 
 export const UPLOAD_FILE_PATH = '/api/upload.file';
 
+/** The temporary files an upload writes before it has its name: `.dlf-upload-<uuid>.part`. */
+export const UPLOAD_PART_PREFIX = '.dlf-upload-';
+const UPLOAD_PART_NAME =
+  /^\.dlf-upload-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.part$/;
+
+/** Whether `name` is one of the plugin's upload temporary files (src/sweep.ts removes stale ones). */
+export function isUploadPartName(name: string): boolean {
+  return UPLOAD_PART_NAME.test(name);
+}
+
 /** Largest file one upload accepts; the browser checks it too, before sending (test/limits.test.ts keeps them in step). */
 export const MAX_UPLOAD_BYTES = 2 * 1024 ** 3;
 
@@ -129,7 +139,7 @@ export function handleUpload(ctx: SaveContext, request: Request): Promise<Respon
       if (errorCode(error) !== 'ENOENT') throw error;
     }
 
-    const temp = join(input.directory, `.dlf-upload-${randomUUID()}.part`);
+    const temp = join(input.directory, `${UPLOAD_PART_PREFIX}${randomUUID()}.part`);
     try {
       await pipeline(
         // The web stream's type differs between lib.dom and node:stream/web only nominally.

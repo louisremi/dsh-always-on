@@ -540,7 +540,7 @@ test('saves keep the agent grant: temp areas stay writable, like for the agent',
 });
 
 test('extra writable roots and cold sessions work at route level', async () => {
-  const extra = join(base, 'up-extra');
+  const extra = join(base, 'extra');
   mkdirSync(extra, { recursive: true });
   const host = realHost('workspace-write', { extraRoots: [extra] }).save;
   assert.equal((await create(host, { directory: extra, name: 'e.txt' })).status, 201);
@@ -1130,14 +1130,16 @@ test('upload.file never overwrites a file, a folder or a symlink', async () => {
 
 test('upload.file follows the sandbox: read-only, outside, symlinked folders, the root', async () => {
   const dir = uploadDir('up-fence');
+  // Its own folder outside the workspace: this test never reads state another one left.
+  const elsewhere = join(base, 'up-fence-outside');
+  mkdirSync(elsewhere);
   const body = 'x';
-  const outsideBefore = readdirSync(outside);
   assert.equal(
     (await upload(realHost('read-only').save, { directory: dir, name: 'a' }, body)).status,
     403,
   );
   assert.equal(
-    (await upload(realHost().save, { directory: outside, name: 'a' }, body)).status,
+    (await upload(realHost().save, { directory: elsewhere, name: 'a' }, body)).status,
     403,
   );
   assert.equal(
@@ -1145,7 +1147,7 @@ test('upload.file follows the sandbox: read-only, outside, symlinked folders, th
       .status,
     403,
   );
-  assert.deepEqual(readdirSync(outside), outsideBefore);
+  assert.deepEqual(readdirSync(elsewhere), []);
   assert.deepEqual(readdirSync(dir), []);
   // The temp areas are not granted (only the workspace and its extra roots).
   assert.equal(
@@ -1171,7 +1173,7 @@ test('upload.file follows the sandbox: read-only, outside, symlinked folders, th
 });
 
 test('upload.file works for extra writable roots and cold sessions', async () => {
-  const extra = join(base, 'extra');
+  const extra = join(base, 'up-extra');
   mkdirSync(extra);
   const res = await upload(
     realHost('workspace-write', { extraRoots: [extra] }).save,
@@ -1275,7 +1277,8 @@ test('upload.file: a cancelled upload leaves no partial file', async () => {
 
 test('upload.file: a folder swapped for a symlink while the bytes arrive is caught', async () => {
   const dir = uploadDir('up-swap');
-  const outsideBefore = readdirSync(outside);
+  const elsewhere = join(base, 'up-swap-outside');
+  mkdirSync(elsewhere);
   const parked = join(workspace, 'up-swap-real');
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   const stream = new ReadableStream<Uint8Array>({
@@ -1299,14 +1302,14 @@ test('upload.file: a folder swapped for a symlink while the bytes arrive is caug
   await new Promise((r) => setTimeout(r, 100));
   // The temporary file is open inside `dir`: park the folder, put a link to the outside in its place.
   renameSync(dir, parked);
-  symlinkSync(outside, dir);
+  symlinkSync(elsewhere, dir);
   controller.enqueue(new TextEncoder().encode('part two'));
   controller.close();
   const res = await pending;
   assert.equal(res.status, 403);
-  assert.deepEqual(readdirSync(outside), outsideBefore);
+  assert.deepEqual(readdirSync(elsewhere), []);
   assert.equal(existsSync(join(parked, 'swapped')), false);
-  assert.equal(existsSync(join(outside, 'swapped')), false);
+  assert.equal(existsSync(join(elsewhere, 'swapped')), false);
   // The only trace: the hidden temporary file, in the folder it was made in. Cleaning
   // up by path would now go through the symlink, which is what the fence refuses.
   assert.deepEqual(
