@@ -64,6 +64,9 @@ window.__ModuleLoader__.load({
     const RENAME_FOLDER_ROUTE = 'api/rename.folder';
     const DELETE_FOLDER_ROUTE = 'api/delete.folder';
     const RESTORE_ROUTE = 'api/restore.entry';
+    const UPLOAD_ROUTE = 'api/upload.file';
+    /** The Host's per-file limit (src/upload-route.ts); checked here before sending. */
+    const UPLOAD_MAX_BYTES = 2 * 1024 ** 3;
     const SUMMARY_ROUTE = 'api/folder.summary';
     const DOWNLOAD_FOLDER_ROUTE = 'api/download.folder';
     /** Slot-entry id prefix of every control this plugin registers. */
@@ -165,6 +168,16 @@ window.__ModuleLoader__.load({
         'Cannot restore {name}: something with that name exists again. It is still in .tmp/deleted/.',
       'restore.gone': 'Cannot restore {name}: it is no longer in the trash.',
       'toast.dismiss': 'Dismiss',
+      'upload.title': 'Upload files',
+      'upload.menu': 'Upload files…',
+      'upload.progress': 'Uploading {name} ({done} of {total}) · {percent}%',
+      'upload.cancel': 'Cancel',
+      'upload.done': 'Uploaded {uploaded} of {total} files.',
+      'upload.skipped': '{n} skipped: the name is already taken.',
+      'upload.tooLarge': '{n} too large (2 GiB at most).',
+      'upload.failed': '{n} failed. Try again.',
+      'upload.denied': '{n} refused: this folder is not writable.',
+      'upload.cancelled': 'Upload stopped. {uploaded} of {total} files were uploaded.',
       'menu.rename': 'Rename or move…',
       'menu.delete': 'Delete…',
       'menu.downloadZip': 'Download as .zip',
@@ -248,6 +261,16 @@ window.__ModuleLoader__.load({
       'restore.taken': '无法恢复 {name}：同名项目已再次存在。它仍在 .tmp/deleted/ 中。',
       'restore.gone': '无法恢复 {name}：它已不在回收站中。',
       'toast.dismiss': '关闭',
+      'upload.title': '上传文件',
+      'upload.menu': '上传文件…',
+      'upload.progress': '正在上传 {name}（{done}/{total}）· {percent}%',
+      'upload.cancel': '取消',
+      'upload.done': '已上传 {uploaded}/{total} 个文件。',
+      'upload.skipped': '{n} 个已跳过：名称已被占用。',
+      'upload.tooLarge': '{n} 个太大（最大 2 GiB）。',
+      'upload.failed': '{n} 个失败，请重试。',
+      'upload.denied': '{n} 个被拒绝：此文件夹不可写。',
+      'upload.cancelled': '上传已停止，已上传 {uploaded}/{total} 个文件。',
       'menu.rename': '重命名或移动…',
       'menu.delete': '删除…',
       'menu.downloadZip': '下载为 .zip',
@@ -350,6 +373,19 @@ span:has(+[data-presented-files-row]){display:none}
         { size },
         h('path', {
           d: 'M1.5 3.5C1.5 2.948 1.948 2.5 2.5 2.5H6L7.5 4.25H13.5C14.052 4.25 14.5 4.698 14.5 5.25V12.5C14.5 13.052 14.052 13.5 13.5 13.5H2.5C1.948 13.5 1.5 13.052 1.5 12.5V3.5Z',
+          stroke: 'currentColor',
+        }),
+      );
+    }
+
+    function UploadIcon({ size }: { size: number }) {
+      return h(
+        Svg,
+        { size },
+        h('path', { d: 'M8 10.0469V1.95317', stroke: 'currentColor' }),
+        h('path', { d: 'M4.25 5.70312L8 1.95312L11.75 5.70312', stroke: 'currentColor' }),
+        h('path', {
+          d: 'M1.5 10.0469V13.158C1.5 13.3937 1.60536 13.6198 1.79289 13.7865C1.98043 13.9532 2.23478 14.0469 2.5 14.0469H13.5C13.7652 14.0469 14.0196 13.9532 14.2071 13.7865C14.3946 13.6198 14.5 13.3937 14.5 13.158V10.0469',
           stroke: 'currentColor',
         }),
       );
@@ -836,6 +872,279 @@ span:has(+[data-presented-files-row]){display:none}
       },
     } as const;
 
+    // ───────────────────────────── uploads ─────────────────────────────
+
+    /** The upload in progress or just finished, shown as a toast by the overlay. */
+    interface UploadState {
+      id: number;
+      phase: 'running' | 'done';
+      total: number;
+      /** 1-based index of the file being sent. */
+      index: number;
+      name: string;
+      percent: number;
+      uploaded: number;
+      skipped: number;
+      tooLarge: number;
+      denied: number;
+      failed: number;
+      cancelled: boolean;
+      /** Set when the folder is gone or the session unknown: the whole batch is refused. */
+      fatal?: string | undefined;
+      abort: () => void;
+    }
+    const uploadUi = uiStore<{ upload: UploadState | undefined }>({ upload: undefined });
+
+    /** What the Host said about one file, or why it never answered. */
+    type UploadResult =
+      | { kind: 'http'; status: number; error?: string | undefined }
+      | { kind: 'network' }
+      | { kind: 'aborted' };
+
+    /** What one file's answer means for the batch: a counter to bump, or the reason the rest cannot go on. */
+    function uploadOutcome(
+      result: UploadResult,
+    ): 'uploaded' | 'skipped' | 'tooLarge' | 'denied' | 'failed' | 'stopped' | { fatal: string } {
+      if (result.kind === 'aborted') return 'stopped';
+      if (result.kind === 'network') return 'failed';
+      const counted = UPLOAD_OUTCOMES[result.status];
+      if (counted !== undefined) return counted;
+      if (result.status === 404)
+        return {
+          fatal: result.error === 'session not found' ? 'mutation.noSession' : 'create.noFolder',
+        };
+      if (result.status === 422) return { fatal: 'mutation.unmapped' };
+      return 'failed';
+    }
+    const UPLOAD_OUTCOMES: Record<number, 'uploaded' | 'skipped' | 'tooLarge' | 'denied'> = {
+      201: 'uploaded',
+      409: 'skipped',
+      413: 'tooLarge',
+      403: 'denied',
+    };
+
+    /** POST one file's bytes to the Host, reporting progress; resolves with the HTTP status (0 on a network error). */
+    function sendFile(
+      sessionId: string,
+      directory: string,
+      file: File,
+      onProgress: (fraction: number) => void,
+      xhr: XMLHttpRequest,
+    ): Promise<UploadResult> {
+      return new Promise((resolve) => {
+        const url = new URL(UPLOAD_ROUTE, document.baseURI);
+        url.searchParams.set('sessionId', sessionId);
+        url.searchParams.set('directory', directory);
+        url.searchParams.set('name', file.name);
+        xhr.open('POST', url.href);
+        xhr.setRequestHeader('content-type', 'application/octet-stream');
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
+        };
+        xhr.onload = () => {
+          let error: string | undefined;
+          try {
+            error = JSON.parse(xhr.responseText)?.error;
+          } catch {
+            /* not JSON */
+          }
+          resolve({ kind: 'http', status: xhr.status, error });
+        };
+        xhr.onerror = () => resolve({ kind: 'network' });
+        xhr.onabort = () => resolve({ kind: 'aborted' });
+        xhr.send(file);
+      });
+    }
+
+    /**
+     * Upload `files` one after the other into `directory`, driving the upload
+     * toast. A name that is taken, a file over the limit or a failure is counted
+     * and skipped; the rest still go. A missing folder or session stops the batch.
+     */
+    async function uploadFiles(sessionId: string, directory: string, files: File[]): Promise<void> {
+      if (files.length === 0) return;
+      let xhr = new XMLHttpRequest();
+      const state: UploadState = {
+        id: nextToastId(),
+        phase: 'running',
+        total: files.length,
+        index: 1,
+        name: files[0]?.name ?? '',
+        percent: 0,
+        uploaded: 0,
+        skipped: 0,
+        tooLarge: 0,
+        denied: 0,
+        failed: 0,
+        cancelled: false,
+        abort: () => {
+          state.cancelled = true;
+          xhr.abort();
+        },
+      };
+      const publish = () => uploadUi.set({ upload: { ...state } });
+      publish();
+      for (const [i, file] of files.entries()) {
+        if (state.cancelled) break;
+        state.index = i + 1;
+        state.name = file.name;
+        state.percent = 0;
+        publish();
+        if (file.size > UPLOAD_MAX_BYTES) {
+          state.tooLarge += 1;
+          continue;
+        }
+        xhr = new XMLHttpRequest();
+        const result = await sendFile(
+          sessionId,
+          directory,
+          file,
+          (fraction) => {
+            const percent = Math.min(100, Math.floor(fraction * 100));
+            if (percent !== state.percent) {
+              state.percent = percent;
+              publish();
+            }
+          },
+          xhr,
+        );
+        const outcome = uploadOutcome(result);
+        if (outcome === 'stopped') break;
+        if (typeof outcome === 'object') {
+          state.fatal = outcome.fatal;
+          break;
+        }
+        if (outcome === 'uploaded') state.uploaded += 1;
+        else state[outcome] += 1;
+      }
+      state.phase = 'done';
+      publish();
+    }
+
+    /** Open the browser's file picker, then upload what was chosen. */
+    function pickAndUpload(sessionId: string, directory: string): void {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = true;
+      input.style.display = 'none';
+      input.addEventListener('change', () => {
+        const files = [...(input.files ?? [])];
+        input.remove();
+        void uploadFiles(sessionId, directory, files);
+      });
+      // A cancelled picker fires no event in older browsers; the element is harmless until then.
+      input.addEventListener('cancel', () => input.remove());
+      document.body.appendChild(input);
+      input.click();
+    }
+
+    /** The upload toast: progress with Cancel while running, then what was done, skipped and refused. */
+    function UploadToastView({ state, t }: { state: UploadState; t: Translate }) {
+      const running = state.phase === 'running';
+      React.useEffect(() => {
+        if (running) return;
+        const clean =
+          state.skipped + state.tooLarge + state.denied + state.failed === 0 &&
+          state.fatal === undefined;
+        const timer = setTimeout(() => {
+          if (uploadUi.state.upload?.id === state.id) uploadUi.set({ upload: undefined });
+        }, toastMs(clean));
+        return () => clearTimeout(timer);
+      }, [
+        running,
+        state.id,
+        state.skipped,
+        state.tooLarge,
+        state.denied,
+        state.failed,
+        state.fatal,
+      ]);
+      const lines: string[] = [];
+      if (running) {
+        lines.push(
+          t('upload.progress', {
+            name: state.name,
+            done: state.index,
+            total: state.total,
+            percent: state.percent,
+          }),
+        );
+      } else {
+        // A fatal stop ends the batch but keeps what already happened.
+        if (state.fatal !== undefined) lines.push(t(state.fatal));
+        const counts = { uploaded: state.uploaded, total: state.total };
+        lines.push(t(state.cancelled ? 'upload.cancelled' : 'upload.done', counts));
+        for (const [key, n] of [
+          ['upload.skipped', state.skipped],
+          ['upload.tooLarge', state.tooLarge],
+          ['upload.denied', state.denied],
+          ['upload.failed', state.failed],
+        ] as const)
+          if (n > 0) lines.push(t(key, { n }));
+      }
+      const bad = !running && (state.fatal !== undefined || state.denied > 0 || state.failed > 0);
+      const toast = h(
+        'div',
+        {
+          className: 'dlf-toast',
+          role: bad ? 'alert' : 'status',
+          'aria-live': 'polite',
+          'data-dlf-upload': state.phase,
+          'data-tone': bad ? 'error' : undefined,
+        },
+        h('span', { className: 'dlf-toast-text' }, lines.join(' ')),
+        running &&
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dlf-toast-btn',
+              'data-dlf-upload-cancel': '',
+              onClick: state.abort,
+            },
+            t('upload.cancel'),
+          ),
+        !running &&
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dlf-toast-close',
+              'aria-label': t('toast.dismiss'),
+              onClick: () => uploadUi.set({ upload: undefined }),
+            },
+            '×',
+          ),
+      );
+      return ReactDOM?.createPortal ? ReactDOM.createPortal(toast, document.body) : toast;
+    }
+
+    /** "Upload files" in the Files tab toolbar: the file picker, then an upload into the folder the tab shows. */
+    function UploadButton({
+      sessionId,
+      absolutePath,
+      t,
+    }: {
+      sessionId?: unknown;
+      absolutePath?: unknown;
+      t: Translate;
+    }) {
+      if (typeof sessionId !== 'string' || typeof absolutePath !== 'string') return null;
+      const label = t('upload.title');
+      return h(
+        'button',
+        {
+          type: 'button',
+          className: 'dlf-tool',
+          title: label,
+          'aria-label': label,
+          'data-upload-files': '',
+          onClick: () => pickAndUpload(sessionId, absolutePath),
+        },
+        h(UploadIcon, { size: 16 }),
+      );
+    }
+
     /**
      * "New file" / "New folder" in the Files tab toolbar. A new file opens in
      * the editor; a new folder simply appears in the tree (it watches the disk).
@@ -994,26 +1303,43 @@ span:has(+[data-presented-files-row]){display:none}
       /** Tabs the delete closed, reopened by a restore. */
       reopen: string[];
     }
-    const entryUi = {
-      dialog: undefined as EntryDialog,
-      toast: undefined as EntryToast | undefined,
-      listeners: new Set<() => void>(),
-      revision: 0,
-      set(change: { dialog?: EntryDialog; toast?: EntryToast | undefined }) {
-        if ('dialog' in change) entryUi.dialog = change.dialog;
-        if ('toast' in change) entryUi.toast = change.toast;
-        entryUi.revision += 1;
-        for (const listener of entryUi.listeners) listener();
-      },
-      subscribe: (listener: () => void) => {
-        entryUi.listeners.add(listener);
-        return () => {
-          entryUi.listeners.delete(listener);
-        };
-      },
-      snapshot: () => entryUi.revision,
-    };
+    /**
+     * An overlay's state, watched by the one overlay that draws it: `set`
+     * merges a change, and subscribers re-read the whole snapshot.
+     */
+    function uiStore<T extends object>(initial: T) {
+      const store = {
+        state: initial,
+        listeners: new Set<() => void>(),
+        revision: 0,
+        set(change: Partial<T>) {
+          store.state = { ...store.state, ...change };
+          store.revision += 1;
+          for (const listener of store.listeners) listener();
+        },
+        subscribe: (listener: () => void) => {
+          store.listeners.add(listener);
+          return () => {
+            store.listeners.delete(listener);
+          };
+        },
+        snapshot: () => store.revision,
+      };
+      return store;
+    }
+    /** One id per toast, so a newer one replaces an older one. */
     let toastIds = 0;
+    const nextToastId = () => {
+      toastIds += 1;
+      return toastIds;
+    };
+    /** How long a toast stays: briefly when all went well, longer when something needs reading. */
+    const toastMs = (clean: boolean) => (clean ? RESTORE_MS : 4 * ERROR_MS);
+
+    const entryUi = uiStore<{ dialog: EntryDialog; toast: EntryToast | undefined }>({
+      dialog: undefined,
+      toast: undefined,
+    });
 
     /** Routes and labels that differ between files and folders. */
     const ENTRY_KINDS = {
@@ -1220,7 +1546,7 @@ span:has(+[data-presented-files-row]){display:none}
         if (held || toast.state === 'restoring') return;
         const timer = setTimeout(
           () => {
-            if (entryUi.toast?.id === toast.id) entryUi.set({ toast: undefined });
+            if (entryUi.state.toast?.id === toast.id) entryUi.set({ toast: undefined });
           },
           settled ? ERROR_MS : RESTORE_MS,
         );
@@ -1238,7 +1564,7 @@ span:has(+[data-presented-files-row]){display:none}
         } catch {
           res = { status: 0, ok: false, body: {} };
         }
-        if (entryUi.toast?.id !== toast.id) return;
+        if (entryUi.state.toast?.id !== toast.id) return;
         if (!res.ok) {
           const error =
             res.status === 409
@@ -1317,7 +1643,9 @@ span:has(+[data-presented-files-row]){display:none}
       t: Translate;
     }) {
       React.useSyncExternalStore(entryUi.subscribe, entryUi.snapshot);
-      const { dialog, toast } = entryUi;
+      React.useSyncExternalStore(uploadUi.subscribe, uploadUi.snapshot);
+      const { dialog, toast } = entryUi.state;
+      const upload = uploadUi.state.upload;
       return h(
         React.Fragment,
         null,
@@ -1330,6 +1658,7 @@ span:has(+[data-presented-files-row]){display:none}
             t,
           }),
         toast !== undefined && h(EntryToastView, { key: toast.id, toast, sidebarRight, t }),
+        upload !== undefined && h(UploadToastView, { key: upload.id, state: upload, t }),
       );
     }
 
@@ -2386,6 +2715,8 @@ span:has(+[data-presented-files-row]){display:none}
           h(CreateButton, { ...props, kind: 'file', sidebarRight: ctx.sidebarRight, t });
         const FilesTabNewFolder = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
           h(CreateButton, { ...props, kind: 'folder', sidebarRight: ctx.sidebarRight, t });
+        const FilesTabUpload = (props: { sessionId?: unknown; absolutePath?: unknown }) =>
+          h(UploadButton, { ...props, t });
 
         const FileRouteDownload = (props: { actionUrl?: unknown }) => {
           const url = routeUrl(props.actionUrl);
@@ -2454,6 +2785,17 @@ span:has(+[data-presented-files-row]){display:none}
             FilesTabNewFolder,
           ),
         );
+        ctx.slots.inject('sidebar.right.tab.files.actions', () =>
+          ctx.slots.register(
+            {
+              name: 'sidebar.right.tab.files.actions',
+              id: `${EDITOR_ID}/upload`,
+              order: 12,
+              locale: NS,
+            },
+            FilesTabUpload,
+          ),
+        );
 
         // ── file and folder actions: the Files tree's right-click menu ──
         // The dialogs and the Restore toast, mounted once for every menu.
@@ -2476,6 +2818,7 @@ span:has(+[data-presented-files-row]){display:none}
               ['always-on.rename', RenameIcon],
               ['always-on.delete', DeleteIcon],
               ['always-on.zip', DownloadIcon],
+              ['always-on.upload', UploadIcon],
             ] as const) {
               yield scope.slots.register({ name: 'contextMenu.icon', key }, () =>
                 h(Icon, { size: 16 }),
@@ -2522,6 +2865,13 @@ span:has(+[data-presented-files-row]){display:none}
                 resolve: ({ sessionId, path }) => {
                   const target = targetOf('folder', sessionId, path);
                   return [
+                    {
+                      id: 'upload',
+                      label: t('upload.menu'),
+                      icon: { key: 'always-on.upload' },
+                      disabled: !target.absolutePath.startsWith('/'),
+                      run: () => pickAndUpload(sessionId, target.absolutePath),
+                    },
                     ...entryActions(target),
                     {
                       id: 'zip',

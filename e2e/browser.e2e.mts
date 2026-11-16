@@ -13,12 +13,20 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { Readable } from 'node:stream';
 import type { SaveContext } from '../src/context.ts';
 
 const require = createRequire(import.meta.url);
@@ -37,6 +45,7 @@ const {
   handleRestore,
 } = await import('../src/entry-route.ts');
 const { handleFolderSummary, handleDownloadFolder } = await import('../src/folder-route.ts');
+const { handleUpload } = await import('../src/upload-route.ts');
 
 const dir = mkdtempSync(join(tmpdir(), 'dlf-e2e-'));
 const versionOf = (p: string) => {
@@ -129,6 +138,7 @@ window.__mountTitles=(titles)=>{
 window.__mount=(what)=>{
   const root=ReactDOM.createRoot(document.getElementById('root'));
   if(what==='editor') root.render(h(reg('sidebar.right.pane.tab',Object.keys({})[0]||'@louisremi/dsh-always-on/editor'),{useTabInfo:()=>info,sessionId:'sess'}));
+  else if(what==='upload') root.render(h(reg('sidebar.right.tab.files.actions',undefined,'@louisremi/dsh-always-on/editor/upload'),{sessionId:'sess',absolutePath:params.get('abs')}));
   else if(what==='newfile'||what==='newfolder') root.render(h(reg('sidebar.right.tab.files.actions',undefined,'@louisremi/dsh-always-on/editor/new-'+what.slice(3)),{sessionId:'sess',absolutePath:params.get('abs')}));
   else root.render(h(reg('sidebar.right.tab.document.actions'),{sessionId:'sess',absolutePath:params.get('abs')}));
 };
@@ -263,6 +273,23 @@ const server = http.createServer(async (req, res) => {
       hostCtx,
       new Request(`http://x${url.pathname}`, { method: 'POST', body: new Uint8Array(body) }),
     );
+    return send(out.status, await out.text(), 'application/json');
+  }
+  if (url.pathname === '/api/upload.file') {
+    // Streamed, like the Harness hands the body over; a client that hangs up aborts it.
+    const abort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abort.abort();
+    });
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
+    const out = await handleUpload(hostCtx, {
+      method: req.method,
+      url: `http://x${url.pathname}${url.search}`,
+      headers,
+      body: Readable.toWeb(req),
+      signal: abort.signal,
+    } as unknown as Request);
     return send(out.status, await out.text(), 'application/json');
   }
   if (url.pathname === '/api/save.file') {
@@ -587,6 +614,97 @@ const menuRun = (page: any, target: 'file' | 'directory', path: string, id: stri
 const menuOf = (page: any, target: 'file' | 'directory', path: string) =>
   page.evaluate(([t, p]: string[]) => (window as any).__menu(t, p), [target, path]);
 
+await check(
+  'Upload: the toolbar button picks files; names taken are skipped, the rest go through',
+  async (page) => {
+    const target = join(dir, 'uploads');
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, 'taken.txt'), 'mine');
+    await page.goto(`${base}/?what=upload&abs=${encodeURIComponent(target)}`);
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      page.click('[data-upload-files]'),
+    ]);
+    assert.equal(chooser.isMultiple(), true);
+    const big = Buffer.alloc(3_000_000, 7);
+    await chooser.setFiles([
+      { name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') },
+      { name: 'taken.txt', mimeType: 'text/plain', buffer: Buffer.from('other') },
+      { name: 'big.bin', mimeType: 'application/octet-stream', buffer: big },
+    ]);
+    await page.waitForSelector('[data-dlf-upload=done]');
+    assert.equal(readFileSync(join(target, 'a.txt'), 'utf8'), 'hello');
+    assert.equal(readFileSync(join(target, 'taken.txt'), 'utf8'), 'mine');
+    assert.deepEqual(readFileSync(join(target, 'big.bin')), big);
+    const text = await page.textContent('[data-dlf-upload]');
+    assert.match(text, /upload\.done/);
+    assert.match(text, /"uploaded":2,"total":3/);
+    assert.match(text, /upload\.skipped\{"n":1\}/);
+    // The summary can be dismissed.
+    await page.click('[data-dlf-upload] .dlf-toast-close');
+    assert.equal(await page.$('[data-dlf-upload]'), null);
+  },
+);
+
+await check(
+  'Upload: the folder menu entry opens the picker, and a missing folder is reported',
+  async (page) => {
+    const target = join(dir, 'uploads-menu');
+    mkdirSync(target, { recursive: true });
+    await page.goto(`${base}/?what=actions&abs=${encodeURIComponent(dir)}`);
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      menuRun(page, 'directory', target, 'upload'),
+    ]);
+    await chooser.setFiles([
+      { name: 'm.txt', mimeType: 'text/plain', buffer: Buffer.from('via menu') },
+    ]);
+    await page.waitForSelector('[data-dlf-upload=done]');
+    assert.equal(readFileSync(join(target, 'm.txt'), 'utf8'), 'via menu');
+    await page.click('[data-dlf-upload] .dlf-toast-close');
+    const gone = join(dir, 'uploads-gone');
+    const [second] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      menuRun(page, 'directory', gone, 'upload'),
+    ]);
+    await second.setFiles([{ name: 'x.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }]);
+    await page.waitForSelector('[data-dlf-upload=done]');
+    assert.match(await page.textContent('[data-dlf-upload]'), /create\.noFolder/);
+    assert.throws(() => statSync(gone));
+  },
+);
+
+await check('Upload: Cancel stops the running upload and leaves no partial file', async (page) => {
+  const target = join(dir, 'uploads-cancel');
+  mkdirSync(target, { recursive: true });
+  await page.goto(`${base}/?what=upload&abs=${encodeURIComponent(target)}`);
+  // Slow the browser's upload so there is time to press Cancel.
+  const client = await page.context().newCDPSession(page);
+  await client.send('Network.enable');
+  await client.send('Network.emulateNetworkConditions', {
+    offline: false,
+    latency: 0,
+    downloadThroughput: -1,
+    uploadThroughput: 200_000,
+  });
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.click('[data-upload-files]'),
+  ]);
+  await chooser.setFiles([
+    { name: 'slow.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(8_000_000, 1) },
+    { name: 'never.txt', mimeType: 'text/plain', buffer: Buffer.from('never') },
+  ]);
+  await page.waitForSelector('[data-dlf-upload-cancel]');
+  await page.click('[data-dlf-upload-cancel]');
+  await page.waitForSelector('[data-dlf-upload=done]');
+  assert.match(await page.textContent('[data-dlf-upload]'), /upload\.cancelled/);
+  // The server undoes the partial temporary file: poll instead of guessing a delay.
+  for (let i = 0; i < 60 && readdirSync(target).length > 0; i++)
+    await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(readdirSync(target), []);
+});
+
 const fileAddr = (p: string) =>
   `dsh-resource://file/session/sess/${p.split('/').map(encodeURIComponent).join('/')}`;
 
@@ -734,11 +852,17 @@ await check(
     // A relative tree path resolves against the session's workspace.
     assert.deepEqual(ids(await menuOf(page, 'file', 'menu.txt')), ['rename', 'delete']);
     assert.deepEqual(ids(await menuOf(page, 'directory', join(dir, 'twin'))), [
+      'upload',
       'rename',
       'delete',
       'zip',
     ]);
-    assert.deepEqual(ids(await menuOf(page, 'directory', dir)), ['rename!', 'delete!', 'zip']);
+    assert.deepEqual(ids(await menuOf(page, 'directory', dir)), [
+      'upload',
+      'rename!',
+      'delete!',
+      'zip',
+    ]);
     const del = (await menuOf(page, 'file', f)).find((i: any) => i.id === 'delete');
     assert.equal(del.danger, true);
     assert.deepEqual(del.icon, { key: 'always-on.delete' });

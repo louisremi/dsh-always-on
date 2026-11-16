@@ -92,3 +92,37 @@ test('registerRoute registers, aborts in-flight requests and awaits them on disp
   assert.ok(removed && sawAbort);
   assert.equal((await inFlight).status, 499);
 });
+
+test('registerRoute forwards a body as it is only when the route asks for streaming', async () => {
+  let route: FetchRoute | undefined;
+  const ctx = {
+    connection: {
+      fetch: {
+        register(r: FetchRoute) {
+          route = r;
+          return () => undefined;
+        },
+      },
+    },
+  };
+  const streamed = async (_ctx: unknown, request: Request) => new Response(await request.text());
+  registerRoute(ctx, {
+    path: '/api/s',
+    methods: ['POST'],
+    requestBody: 'streaming',
+    handle: streamed,
+  });
+  assert.equal(route?.requestBody, 'streaming');
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('chunk'));
+      controller.close();
+    },
+  });
+  const out = await route?.fetch(
+    new Request('http://x/api/s', { method: 'POST', body, duplex: 'half' } as RequestInit),
+  );
+  assert.equal(await out?.text(), 'chunk');
+  registerRoute(ctx, { path: '/api/b', methods: ['POST'], handle: async () => new Response('ok') });
+  assert.equal(route?.requestBody, 'buffered');
+});
