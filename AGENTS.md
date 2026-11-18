@@ -19,7 +19,7 @@ Changes land on `main` as pull requests, so each GitHub Release can describe its
 
 ## Agent skills
 
-These repo conventions are read by the Matt Pocock engineering skills (`/triage`, `/to-spec`, `/to-tickets`, `/wayfinder`, `/grill-with-docs`, `/domain-modeling`). The skills themselves are a local-only install and are gitignored; these config files are repo content.
+These repo conventions are read by the Matt Pocock engineering skills (`/triage`, `/to-spec`, `/to-tickets`, `/wayfinder`, `/grill-with-docs`, `/domain-modeling`). The skills themselves are installed outside this repo (in the Harness's user skill root, shared by every workspace); these config files are repo content.
 
 ### Issue tracker
 
